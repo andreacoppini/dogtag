@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DogTag Plus</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" href="icon.png" sizes="256x256">
+</head>
+<body>
+
+<header>
+  <div class="brand">DogTag Plus <span id="ver"></span><a id="update" class="update" hidden target="_blank" rel="noopener"></a></div>
+  <button id="run" class="primary">Run</button>
+  <button id="stop" disabled>Stop</button>
+  <div class="phase" id="phase">idle</div>
+  <div class="progress"><i id="bar"></i></div>
+  <div class="counters">
+    <div class="counter"><b id="cTotal">0</b><i>APs</i></div>
+    <div class="counter ok"><b id="cDone">0</b><i>done</i></div>
+    <div class="counter err"><b id="cFail">0</b><i>failed</i></div>
+  </div>
+  <button id="expCsv" title="Save what the current tab shows, results included">CSV</button>
+</header>
+
+<div class="app">
+<aside>
+  <div class="locknote" id="lockNote" hidden>Locked while a run is in progress — press Stop to change anything.</div>
+
+  <section>
+    <h2>Controller</h2>
+    <div class="body">
+      <div class="seg" id="kindSeg">
+        <label class="check"><input type="radio" name="kind" value="sz" id="kindSz" checked>
+          <span><b>SmartZone</b> — SZ-100, SZ-144, SZ-300 or any vSZ, version 5 and up</span></label>
+        <label class="check"><input type="radio" name="kind" value="r1" id="kindR1">
+          <span><b>RUCKUS One</b> — a cloud tenant, through the R1 API</span></label>
+      </div>
+
+      <div id="szOpts">
+        <div class="row">
+          <label style="flex:3"><span>Address</span><input type="text" id="host" placeholder="IP address or name" autocomplete="off" spellcheck="false"></label>
+          <label><span>Port</span><input type="text" id="port"></label>
+        </div>
+        <label><span>Username</span><input type="text" id="user" autocomplete="off" spellcheck="false"></label>
+        <label><span>Password</span><input type="password" id="pass" autocomplete="off"></label>
+        <label class="check"><input type="checkbox" id="showPass"> Show password</label>
+      </div>
+
+      <div id="r1Opts" hidden>
+        <label><span>Region</span>
+          <select id="r1Region">
+            <option value="us">US / North America</option>
+            <option value="eu">Europe</option>
+            <option value="asia">Asia</option>
+          </select>
+        </label>
+        <label><span>Tenant ID</span><input type="text" id="r1Tenant" autocomplete="off" spellcheck="false"></label>
+        <label><span>Client ID</span><input type="text" id="r1ClientId" autocomplete="off" spellcheck="false"></label>
+        <label><span>Shared secret</span><input type="password" id="r1Secret" autocomplete="off"></label>
+        <div class="hint">Create the client ID and secret in RUCKUS One under Administration → Account Management → Settings → Application Token. The tenant ID is on the same page. Changing APs needs a key with administrator rights.</div>
+      </div>
+
+      <button id="connect" class="primary">Connect</button>
+      <div class="srvbox">
+        <div class="srvhead">
+          <span class="dot" id="connDot"></span>
+          <b id="connState">Not connected</b>
+        </div>
+        <div class="hint" id="connInfo"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span id="zoneTitle">Zone</span></h2>
+    <div class="body">
+      <select id="zone" disabled></select>
+      <button id="exportZone" disabled>Export APs to CSV…</button>
+      <div class="hint" id="zoneHint">The export lists every AP here. Edit it in a spreadsheet and load it straight back in under AP Naming.</div>
+    </div>
+  </section>
+
+  <section id="namingSection">
+    <h2>Naming file <span id="nRows"></span></h2>
+    <div class="body">
+      <div class="filebtns">
+        <button id="pickNaming">Load CSV…</button>
+        <button id="clearNaming">Clear</button>
+      </div>
+      <input type="file" id="fileNaming" accept=".csv,.txt" hidden>
+      <div class="hint" id="namingHint">No file loaded.</div>
+      <div class="hint">One AP per row, MAC address first: MAC, Name, Description, Location, Latitude, Longitude, 2.4G width, 2.4G channel, 5G width, 5G channel. Blank cells are left alone; rows that do not start with a MAC are skipped. A channel with no width means 20 MHz.</div>
+      <div class="hint warn" id="namingR1Hint" hidden>RUCKUS One has no Location field, so that column is ignored there. Changes are accepted first and applied by the cloud shortly after.</div>
+    </div>
+  </section>
+
+  <section id="overridesSection" hidden>
+    <h2>Remove overrides <span id="nMacs"></span></h2>
+    <div class="body">
+      <div class="filebtns">
+        <button id="pickMacs">Load CSV…</button>
+        <button id="clearMacs">Clear</button>
+      </div>
+      <input type="file" id="fileMacs" accept=".csv,.txt" hidden>
+      <div class="hint" id="macsHint">No file loaded.</div>
+      <label><span>Settings to hand back to the <span class="zoneWord">zone</span></span>
+        <div class="pklist optlist" id="optList"></div>
+      </label>
+      <div class="links"><a id="optAll">All</a><a id="optNone">None</a><a id="optDefault">Default</a></div>
+      <div class="hint" id="optHint">Connect to see what this controller offers.</div>
+      <div class="row">
+        <label><span>2.4 GHz radio</span>
+          <select id="radio24"><option value="skip">Leave as is</option><option value="on">Switch on</option><option value="off">Switch off</option></select>
+        </label>
+        <label><span>5 GHz radio</span>
+          <select id="radio50"><option value="skip">Leave as is</option><option value="on">Switch on</option><option value="off">Switch off</option></select>
+        </label>
+      </div>
+      <label><span>AP IP address</span>
+        <select id="ipMode"><option value="skip">Leave as is</option><option value="dynamic">Force dynamic (DHCP)</option></select>
+      </label>
+    </div>
+  </section>
+
+  <section id="channelsSection" hidden>
+    <h2>Channels</h2>
+    <div class="body">
+      <div class="hint">Pick a <span class="zoneWord">zone</span> above and press Refresh. Only connected APs are counted.</div>
+    </div>
+  </section>
+
+  <section class="collapsed">
+    <h2>Settings</h2>
+    <div class="body">
+      <label><span>Requests at once</span><input type="number" id="concurrency" min="1" max="64"></label>
+      <div class="hint">How many APs are worked on in parallel.</div>
+      <label><span>SmartZone API version</span><input type="text" id="apiVersion" placeholder="Automatic — the newest offered" spellcheck="false"></label>
+      <label class="check"><input type="checkbox" id="verifyTls"> Verify the SmartZone certificate</label>
+      <div class="hint">Off by default: most controllers present a self-signed certificate.</div>
+      <label class="check"><input type="checkbox" id="debug"> Log every API request</label>
+    </div>
+  </section>
+</aside>
+
+<main>
+  <div class="tools" id="tools">
+    <div class="tab on" data-v="naming">AP Naming and Static Channels</div>
+    <div class="tab" data-v="overrides">Remove Overrides</div>
+    <div class="tab" data-v="channels">Channels</div>
+    <div class="tab" data-v="scaling">Scaling</div>
+    <div class="tab" data-v="about">About</div>
+  </div>
+
+  <!-- AP naming -->
+  <div class="view" id="vNaming">
+    <div class="tablebar">
+      <input type="text" id="filterNaming" placeholder="Filter by MAC, name, result…">
+      <div class="chips" id="chipsNaming"></div>
+      <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+        <span class="hint" id="selNaming"></span>
+        <button id="removeNaming" disabled>Remove</button>
+        <span class="hint" id="shownNaming"></span>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>MAC Address</th><th>Name</th><th>Description</th><th>Location</th>
+          <th>Latitude</th><th>Longitude</th>
+          <th>Width 2.4G</th><th>Channel 2.4G</th><th>Width 5G</th><th>Channel 5G</th>
+          <th>Result</th>
+        </tr></thead>
+        <tbody id="rowsNaming"></tbody>
+      </table>
+      <div class="empty" id="emptyNaming">Please load a CSV file — or export a zone first to get one to edit.</div>
+    </div>
+  </div>
+
+  <!-- remove overrides -->
+  <div class="view" id="vOverrides" hidden>
+    <div class="tablebar">
+      <input type="text" id="filterOverrides" placeholder="Filter by MAC, result…">
+      <div class="chips" id="chipsOverrides"></div>
+      <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+        <span class="hint" id="selOverrides"></span>
+        <button id="removeOverrides" disabled>Remove</button>
+        <span class="hint" id="shownOverrides"></span>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>MAC Address</th><th>OK</th><th>Error</th></tr></thead>
+        <tbody id="rowsOverrides"></tbody>
+      </table>
+      <div class="empty" id="emptyOverrides">Please load a CSV file — the first column of each row is the AP's MAC address.</div>
+    </div>
+  </div>
+
+  <!-- channels -->
+  <div class="view" id="vChannels" hidden>
+    <div class="tablebar">
+      <span class="hint" id="chanInfo">Nothing counted yet — pick a zone and press Refresh.</span>
+    </div>
+    <div class="bands" id="bands"></div>
+  </div>
+
+  <!-- scaling -->
+  <div class="view" id="vScaling" hidden>
+    <div class="page">
+      <div class="card">
+        <h3>SmartZone configuration</h3>
+        <div class="seg">
+          <label class="check"><input type="radio" name="scalDash" value="essentials" checked> <span><b>Essentials</b></span></label>
+          <label class="check"><input type="radio" name="scalDash" value="high"> <span><b>High Scale</b></span></label>
+        </div>
+        <label><span>Version</span>
+          <select id="scalVer"><option value="3">pre 5.0</option><option value="5.0">5.0</option><option value="5.1" selected>5.1 onwards</option></select>
+        </label>
+        <label><span>Nodes in the cluster: <b id="scalNodesVal">1</b></span>
+          <input type="range" id="scalNodes" min="1" max="4" step="1" value="1">
+        </label>
+      </div>
+      <div class="card">
+        <h3>Capacity</h3>
+        <label><span>Slide to trade access points against switches</span>
+          <input type="range" id="scalAP" min="0" max="1024" step="1" value="1024">
+        </label>
+        <div class="row">
+          <div class="big"><span id="scalAPVal">1024</span><small>Access points</small></div>
+          <div class="big"><span id="scalSwVal">0</span><small>Switches</small></div>
+        </div>
+        <div class="hint" id="scalHint"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- about -->
+  <div class="view" id="vAbout" hidden>
+    <div class="page"><div class="about">
+      <h1>DogTag Plus <span id="aboutVer" class="hint"></span></h1>
+      <div>A companion for bulk naming, configuration and auditing of RUCKUS access points, through a SmartZone controller (SZ-100, SZ-144, SZ-300 or any vSZ, version 5 and up) or a RUCKUS One tenant. Everything goes through the controller's own API.</div>
+
+      <h4>AP Naming and Static Channels</h4>
+      <ul>
+        <li>Connect. There is no need to pick a zone.</li>
+        <li>Load a CSV file, check the table, and press <b>Run</b>.</li>
+      </ul>
+      <h4>Remove Overrides</h4>
+      <ul>
+        <li>Connect, and load a CSV file of MAC addresses.</li>
+        <li>Choose which per-AP settings to hand back to the zone or venue (the default is the usual set), and whether to switch radios or force DHCP.</li>
+        <li>Press <b>Run</b>.</li>
+      </ul>
+      <h4>Channels</h4>
+      <ul>
+        <li>Connect, pick a zone or venue, and press <b>Refresh</b> to count the connected APs on each channel.</li>
+      </ul>
+      <h4>Export</h4>
+      <div><b>Export APs to CSV</b> writes every AP in the selected zone or venue. Edit it in Excel, Sheets or anything else, and load it back as is under AP Naming.</div>
+
+      <h4>Command line</h4>
+      <div>The connection can be pre-filled: <code>-ip=</code>, <code>-port=</code>, <code>-user=</code>, <code>-pwd=</code>, and <code>-debug=yes</code> to log every request — the original DogTag's flags all still work. Add <code>-export</code>, <code>-names</code>, <code>-remove-overrides</code> or <code>-channels</code> to run without the console; <code>-h</code> lists everything.</div>
+
+      <h4>Feedback welcome</h4>
+      <div>Andrea Coppini · <a href="mailto:andrea@tacoppini.com">andrea@tacoppini.com</a> · <a href="https://github.com/andreacoppini/dogtag" target="_blank" rel="noopener">github.com/andreacoppini/dogtag</a></div>
+      <p class="warn">This is an unofficial, unsupported tool. I am not responsible for any outcome, good or bad. USE AT YOUR OWN RISK.</p>
+    </div></div>
+  </div>
+
+  <div class="drawer" id="drawer">
+    <div class="tabs">
+      <div class="tab on">Log</div>
+      <div style="margin-left:auto;display:flex;gap:8px"><button id="clearLog">Clear</button><button id="grow">Expand</button></div>
+    </div>
+    <div class="pane" id="pLog"></div>
+  </div>
+</main>
+</div>
+
+<div class="modal" id="confirm" hidden>
+  <div>
+    <h3>Confirm</h3>
+    <div>This run will change <b id="cN">0</b> access points on <b id="cWhere"></b>:</div>
+    <ul id="cList"></ul>
+    <div class="hint">These take effect immediately and cannot be undone from here.</div>
+    <div class="btns">
+      <button id="cCancel">Cancel</button>
+      <button id="cGo" class="danger">Run anyway</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
