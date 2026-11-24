@@ -8,6 +8,7 @@
 //	POST {host}/oauth2/token/{tenantId}                    client credentials -> bearer token
 //	POST {host}/venues/query                               venues
 //	POST {host}/venues/aps/query                           APs, with status and radio channels
+//	POST {host}/venues/{venueId}/aps                       add an AP by serial number
 //	GET/PUT {host}/venues/{venueId}/aps/{serial}           name, description, GPS
 //	GET/PUT {host}/venues/{venueId}/aps/{serial}/radioSettings
 //	PUT {host}/venues/{venueId}/aps/{serial}/networkSettings
@@ -399,6 +400,20 @@ func (c *Client) UpdateAP(ctx context.Context, venueID, serial string, d Detail)
 		body["deviceGps"] = map[string]string{"latitude": d.Latitude, "longitude": d.Longitude}
 	}
 	return c.do(ctx, http.MethodPut, apPath(venueID, serial), body, nil)
+}
+
+// AddAP adds an AP to a venue by serial number, before it has ever come
+// online. R1 creates it asynchronously: the call returning means the request
+// was accepted, and the AP's own settings can be changed a little later.
+func (c *Client) AddAP(ctx context.Context, venueID, serial string, d Detail) error {
+	body := map[string]any{"serialNumber": serial, "name": d.Name}
+	if d.Description != "" {
+		body["description"] = d.Description
+	}
+	if d.Latitude != "" && d.Longitude != "" {
+		body["deviceGps"] = map[string]string{"latitude": d.Latitude, "longitude": d.Longitude}
+	}
+	return c.do(ctx, http.MethodPost, "/venues/"+url.PathEscape(venueID)+"/aps", body, nil)
 }
 
 // Band names the per-band blocks of an AP's radio settings.

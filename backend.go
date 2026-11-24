@@ -33,7 +33,10 @@ type Backend interface {
 	// that cannot work fails once instead of once per request. id is a MAC
 	// address or a serial number, as the file gave it.
 	Check(ctx context.Context, id string) error
-	ApplyName(ctx context.Context, row NameRow) error
+	// ApplyName applies one row. addTo, when not empty, is the venue an AP the
+	// controller does not know yet may be added to; only RUCKUS One can. The
+	// note says what was done when that was more than a plain update.
+	ApplyName(ctx context.Context, row NameRow, addTo string) (note string, err error)
 	OverrideOptions() []OverrideOption
 	// RemoveOverrides hands the named settings back to the zone or venue,
 	// reporting each one through note.
@@ -123,15 +126,15 @@ func (b *szBackend) Check(_ context.Context, id string) error {
 	return nil
 }
 
-func (b *szBackend) ApplyName(ctx context.Context, row NameRow) error {
+func (b *szBackend) ApplyName(ctx context.Context, row NameRow, _ string) (string, error) {
 	if err := b.Check(ctx, row.ID); err != nil {
-		return err
+		return "", err
 	}
 	p, err := row.patch()
 	if err != nil {
-		return err
+		return "", err
 	}
-	return b.c.PatchAP(ctx, row.ID, p)
+	return "", b.c.PatchAP(ctx, row.ID, p)
 }
 
 // szOverrides are the per-AP overrides SmartZone can clear. The names are the
@@ -259,29 +262,48 @@ func (b *r1Backend) Detail(ctx context.Context, ap *APInfo) error {
 	return nil
 }
 
+// errNotInTenant marks an ID RUCKUS One has no AP for.
+var errNotInTenant = errors.New("not in the tenant")
+
+// missingError is the readable form of errNotInTenant for one row.
+type missingError string
+
+func (e missingError) Error() string        { return string(e) }
+func (e missingError) Is(target error) bool { return target == errNotInTenant }
+
+// load reads the tenant's AP list if it has not been read yet. The caller
+// holds the lock.
+func (b *r1Backend) load(ctx context.Context) error {
+	if b.index != nil {
+		return nil
+	}
+	aps, err := b.c.APs(ctx, "")
+	if err != nil {
+		return err
+	}
+	b.index = make(map[string]r1.AP, 2*len(aps))
+	for _, a := range aps {
+		b.remember(a)
+	}
+	return nil
+}
+
 // find resolves a serial number or a MAC to the AP R1 knows it as, reading
 // the tenant's AP list the first time one is asked for.
 func (b *r1Backend) find(ctx context.Context, id string) (r1.AP, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.index == nil {
-		aps, err := b.c.APs(ctx, "")
-		if err != nil {
-			return r1.AP{}, err
-		}
-		b.index = make(map[string]r1.AP, 2*len(aps))
-		for _, a := range aps {
-			b.remember(a)
-		}
+	if err := b.load(ctx); err != nil {
+		return r1.AP{}, err
 	}
 	ap, ok := b.index[id]
 	switch {
 	case ok:
 		return ap, nil
 	case isSerial(id):
-		return r1.AP{}, errors.New("no AP with this serial number in the tenant: add it to a venue in RUCKUS One first")
+		return r1.AP{}, missingError("no AP with this serial number in the tenant")
 	}
-	return r1.AP{}, errors.New("no AP with this MAC address in the tenant; an AP that has not come online yet can only be found by serial number")
+	return r1.AP{}, missingError("no AP with this MAC address in the tenant; an AP that has not come online yet can only be found by serial number")
 }
 
 // remember indexes one AP. The caller holds the lock.
@@ -306,13 +328,32 @@ func (b *r1Backend) forget() {
 	b.mu.Unlock()
 }
 
-func (b *r1Backend) ApplyName(ctx context.Context, row NameRow) error {
+// Missing returns the serial numbers the tenant does not have: the APs a
+// naming run could add. A MAC address R1 does not know is not among them,
+// since an AP can only be added by serial.
+func (b *r1Backend) Missing(ctx context.Context, ids []string) ([]string, error) {
+	b.forget()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.load(ctx); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, id := range ids {
+		if _, known := b.index[id]; !known && isSerial(id) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+func (b *r1Backend) ApplyName(ctx context.Context, row NameRow, addTo string) (string, error) {
 	if (row.Latitude == "") != (row.Longitude == "") {
-		return errors.New("latitude and longitude must be given together")
+		return "", errors.New("latitude and longitude must be given together")
 	}
 	for _, v := range []string{row.Latitude, row.Longitude} {
 		if _, err := strconv.ParseFloat(v, 64); v != "" && err != nil {
-			return fmt.Errorf("latitude and longitude must be numbers (got %q)", v)
+			return "", fmt.Errorf("latitude and longitude must be numbers (got %q)", v)
 		}
 	}
 	bands := map[string]r1.RadioChange{}
@@ -321,14 +362,14 @@ func (b *r1Backend) ApplyName(ctx context.Context, row NameRow) error {
 		if cols[0] != "" {
 			n, err := strconv.Atoi(cols[0])
 			if err != nil {
-				return fmt.Errorf("channel width %q is not a number", cols[0])
+				return "", fmt.Errorf("channel width %q is not a number", cols[0])
 			}
 			ch.Width = &n
 		}
 		if cols[1] != "" {
 			n, err := strconv.Atoi(cols[1])
 			if err != nil {
-				return fmt.Errorf("channel %q is not a number", cols[1])
+				return "", fmt.Errorf("channel %q is not a number", cols[1])
 			}
 			ch.Channel = &n
 		}
@@ -336,30 +377,55 @@ func (b *r1Backend) ApplyName(ctx context.Context, row NameRow) error {
 			bands[band] = ch
 		}
 	}
+	detail := r1.Detail{Name: row.Name, Description: row.Description, Latitude: row.Latitude, Longitude: row.Longitude}
 	record := row.Name != "" || row.Description != "" || row.Latitude != ""
+
+	ap, err := b.find(ctx, row.ID)
+	if errors.Is(err, errNotInTenant) && addTo != "" && isSerial(row.ID) {
+		return b.add(ctx, row.ID, addTo, detail, len(bands) > 0)
+	}
+	if err != nil {
+		return "", err
+	}
 	if !record && len(bands) == 0 {
 		if row.Location != "" {
-			return errors.New("nothing to change: RUCKUS One has no location field, and the row sets nothing else")
+			return "", errors.New("nothing to change: RUCKUS One has no location field, and the row sets nothing else")
 		}
-		return errors.New("nothing to change: every column after the first is empty")
-	}
-	ap, err := b.find(ctx, row.ID)
-	if err != nil {
-		return err
+		return "", errors.New("nothing to change: every column after the first is empty")
 	}
 	if record {
-		err := b.c.UpdateAP(ctx, ap.VenueID, ap.Serial, r1.Detail{Name: row.Name, Description: row.Description,
-			Latitude: row.Latitude, Longitude: row.Longitude})
-		if err != nil {
-			return err
+		if err := b.c.UpdateAP(ctx, ap.VenueID, ap.Serial, detail); err != nil {
+			return "", err
 		}
 	}
 	if len(bands) > 0 {
 		if err := b.c.ChangeRadios(ctx, ap.VenueID, ap.Serial, bands); err != nil {
-			return fmt.Errorf("radio settings: %w", err)
+			return "", fmt.Errorf("radio settings: %w", err)
 		}
 	}
-	return nil
+	return "", nil
+}
+
+// add puts an AP the tenant does not have into a venue. R1 creates the AP
+// after accepting the request, so its radio settings do not exist yet and any
+// channels the row asks for are left for a second run rather than sent to
+// fail.
+func (b *r1Backend) add(ctx context.Context, serial, venueID string, d r1.Detail, wantsRadio bool) (string, error) {
+	if d.Name == "" {
+		return "", errors.New("not in the tenant, and it cannot be added without a name")
+	}
+	if err := b.c.AddAP(ctx, venueID, serial, d); err != nil {
+		return "", fmt.Errorf("could not add it to the venue: %w", err)
+	}
+	b.mu.Lock()
+	if b.index != nil {
+		b.index[serial] = r1.AP{Serial: serial, Name: d.Name, VenueID: venueID}
+	}
+	b.mu.Unlock()
+	if wantsRadio {
+		return "ADDED to the venue. Channels not set: RUCKUS One is still creating the AP, so run the file again in a minute", nil
+	}
+	return "ADDED to the venue", nil
 }
 
 // r1Overrides are the per-AP settings R1 lets an AP take from its venue

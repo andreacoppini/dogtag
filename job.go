@@ -125,8 +125,10 @@ feed:
 // this AP.
 func sessionLost(err error) bool { return errors.Is(err, sz.ErrSessionEnded) }
 
-// runNaming applies a naming file: each AP on its own, many at once.
-func runNaming(ctx context.Context, b Backend, rows []NameRow, conc int, emit Emitter) error {
+// runNaming applies a naming file: each AP on its own, many at once. addTo,
+// when not empty, is the venue that APs the controller does not have yet are
+// added to; otherwise such rows fail.
+func runNaming(ctx context.Context, b Backend, rows []NameRow, addTo string, conc int, emit Emitter) error {
 	const job = "naming"
 	t := &tally{total: len(rows)}
 	emit(Event{Kind: EvPhase, Job: job, Phase: "applying", Total: t.total})
@@ -137,10 +139,10 @@ func runNaming(ctx context.Context, b Backend, rows []NameRow, conc int, emit Em
 	forEach(ctx, len(rows), conc, func(i int) {
 		row := rows[i]
 		res := &RowResult{Index: i, ID: row.ID}
-		err := b.ApplyName(ctx, row)
+		note, err := b.ApplyName(ctx, row, addTo)
 		switch {
 		case err == nil:
-			res.OK = "OK"
+			res.OK = firstNonEmpty(note, "OK")
 			t.done.Add(1)
 		case ctx.Err() != nil:
 			return // stopped mid-request: the row is simply not done

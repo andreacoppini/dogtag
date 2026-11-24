@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -114,7 +115,7 @@ func TestNamingOnSmartZone(t *testing.T) {
 		{ID: "D4:68:4D:10:23:A3"},
 	}
 	emit, got := collect()
-	if err := runNaming(context.Background(), b, rows, 4, emit); err != nil {
+	if err := runNaming(context.Background(), b, rows, "", 4, emit); err != nil {
 		t.Fatal(err)
 	}
 	res := got()
@@ -247,7 +248,7 @@ func TestALostSessionStopsTheRun(t *testing.T) {
 		rows[i] = NameRow{ID: "D4:68:4D:10:20:A0", Name: "x"}
 	}
 	emit, got := collect()
-	err := runNaming(context.Background(), b, rows, 2, emit)
+	err := runNaming(context.Background(), b, rows, "", 2, emit)
 	if !errors.Is(err, sz.ErrSessionEnded) {
 		t.Fatalf("err = %v, want ErrSessionEnded", err)
 	}
@@ -261,7 +262,7 @@ func TestStopLeavesUnreachedRowsUnmarked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	emit, got := collect()
-	if err := runNaming(ctx, b, []NameRow{{ID: "D4:68:4D:10:20:A0", Name: "x"}}, 1, emit); err != nil {
+	if err := runNaming(ctx, b, []NameRow{{ID: "D4:68:4D:10:20:A0", Name: "x"}}, "", 1, emit); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(got()); n != 0 {
@@ -282,7 +283,7 @@ func TestNamingOnRuckusOne(t *testing.T) {
 		{ID: "C8:03:F5:30:44:B4", Name: "Half", Latitude: "35"},
 	}
 	emit, got := collect()
-	if err := runNaming(context.Background(), b, rows, 3, emit); err != nil {
+	if err := runNaming(context.Background(), b, rows, "", 3, emit); err != nil {
 		t.Fatal(err)
 	}
 	res := got()
@@ -403,7 +404,7 @@ func TestRuckusOneWorksAPsBySerialBeforeTheyHaveAMAC(t *testing.T) {
 		{ID: "432199999999", Name: "Not in the tenant"},
 	}
 	emit, got := collect()
-	if err := runNaming(context.Background(), b, rows, 2, emit); err != nil {
+	if err := runNaming(context.Background(), b, rows, "", 2, emit); err != nil {
 		t.Fatal(err)
 	}
 	res := got()
@@ -466,7 +467,7 @@ func TestSmartZoneRefusesASerialNumber(t *testing.T) {
 	f := fakesz.New()
 	b := szBackendFor(t, f)
 	emit, got := collect()
-	if err := runNaming(context.Background(), b, []NameRow{{ID: "981902000400", Name: "x"}}, 1, emit); err != nil {
+	if err := runNaming(context.Background(), b, []NameRow{{ID: "981902000400", Name: "x"}}, "", 1, emit); err != nil {
 		t.Fatal(err)
 	}
 	if e := got()[0].Error; !strings.Contains(e, "identifies APs by MAC address") {
@@ -482,5 +483,85 @@ func TestSmartZoneRefusesASerialNumber(t *testing.T) {
 	}
 	if n := len(f.Calls()); n != 0 {
 		t.Errorf("%d requests were sent for a row SmartZone cannot address", n)
+	}
+}
+
+func TestRuckusOneAddsMissingAPsOnlyWhenTold(t *testing.T) {
+	f := fakesz.NewR1()
+	b := r1BackendFor(t, f).(*r1Backend)
+	ctx := context.Background()
+	rows := []NameRow{
+		{ID: "432155550001", Name: "New-1", Description: "Second floor"},
+		{ID: "432155550002", Name: "New-2", Channel24: "6", Width24: "20"},
+		{ID: "432155550003"},                 // no name: cannot be added
+		{ID: "AA:BB:CC:DD:EE:FF", Name: "x"}, // a MAC is not something to add by
+		{ID: "432100001000", Name: "Already-here"},
+	}
+	ids := make([]string, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+	missing, err := b.Missing(ctx, ids)
+	if err != nil || !reflect.DeepEqual(missing, []string{"432155550001", "432155550002", "432155550003"}) {
+		t.Fatalf("missing = %v, %v", missing, err)
+	}
+
+	// Without the go-ahead nothing is created.
+	emit, got := collect()
+	if err := runNaming(ctx, b, rows, "", 1, emit); err != nil {
+		t.Fatal(err)
+	}
+	if e := got()[0].Error; !strings.Contains(e, "no AP with this serial number") {
+		t.Errorf("row 0 without add = %+v", got()[0])
+	}
+	for _, c := range f.Calls() {
+		if c.Method == "POST" {
+			t.Fatalf("an AP was added without being asked to: %+v", c)
+		}
+	}
+
+	b.forget()
+	emit, got = collect()
+	if err := runNaming(ctx, b, rows, "v-branch", 2, emit); err != nil {
+		t.Fatal(err)
+	}
+	res := got()
+	if res[0].OK != "ADDED to the venue" {
+		t.Errorf("row 0 = %+v", res[0])
+	}
+	if !strings.HasPrefix(res[1].OK, "ADDED to the venue. Channels not set") {
+		t.Errorf("row 1 = %+v; channels cannot be set on an AP still being created", res[1])
+	}
+	if !strings.Contains(res[2].Error, "cannot be added without a name") {
+		t.Errorf("row 2 = %+v", res[2])
+	}
+	if !strings.Contains(res[3].Error, "no AP with this MAC address") {
+		t.Errorf("row 3 = %+v", res[3])
+	}
+	if res[4].OK != "OK" {
+		t.Errorf("row 4 = %+v; an AP already in the tenant is just updated", res[4])
+	}
+	var added []string
+	for _, c := range f.Calls() {
+		if c.Method == "POST" {
+			added = append(added, c.Path+" "+c.Body["serialNumber"].(string))
+			if c.Body["serialNumber"] == "432155550001" && c.Body["description"] != "Second floor" {
+				t.Errorf("add body = %v", c.Body)
+			}
+		}
+		if strings.Contains(c.Path, "43215555") && strings.HasSuffix(c.Path, "radioSettings") {
+			t.Errorf("radio settings were sent for an AP that does not exist yet: %s", c.Path)
+		}
+	}
+	sort.Strings(added)
+	if !reflect.DeepEqual(added, []string{"/venues/v-branch/aps 432155550001", "/venues/v-branch/aps 432155550002"}) {
+		t.Errorf("added = %v", added)
+	}
+	if name, desc := f.Name("432155550001"); name != "New-1" || desc != "Second floor" {
+		t.Errorf("new AP = %q / %q", name, desc)
+	}
+	// A second run finds them and no longer offers to add them.
+	if missing, _ := b.Missing(ctx, ids); !reflect.DeepEqual(missing, []string{"432155550003"}) {
+		t.Errorf("missing after the run = %v", missing)
 	}
 }

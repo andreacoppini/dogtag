@@ -278,6 +278,22 @@
 </main>
 </div>
 
+<div class="modal" id="addAsk" hidden>
+  <div style="width:520px;max-width:90vw">
+    <h3>These APs are not in RUCKUS One yet</h3>
+    <div><b id="aN">0</b> of the serial numbers in this file are not in the tenant:</div>
+    <div class="pklist" id="aList" style="height:auto;max-height:150px;margin:10px 0"></div>
+    <div class="hint warn" id="aNoName" hidden></div>
+    <label style="margin-top:10px"><span>Add them to this venue</span><select id="aVenue"></select></label>
+    <div class="hint warn" style="margin-top:10px">Adding creates new access points in your tenant, which may count against its licences. To take one out again you have to delete it in RUCKUS One. Check the serial numbers before you agree.</div>
+    <div class="btns">
+      <button id="aCancel">Cancel</button>
+      <button id="aSkip">Skip them</button>
+      <button id="aAdd" class="danger">Add them</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="confirm" hidden>
   <div>
     <h3>Confirm</h3>

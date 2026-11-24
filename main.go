@@ -52,6 +52,7 @@ type options struct {
 	namesPath     string
 	overridesPath string
 	channels      bool
+	addMissing    bool
 	overrides     string
 	radio24       string
 	radio50       string
@@ -120,6 +121,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.zone, "venue", "", "same as -zone")
 	fs.StringVar(&o.exportPath, "export", "", "write the zone's APs to this CSV file")
 	fs.StringVar(&o.namesPath, "names", "", "apply this naming CSV: names, descriptions, locations, GPS, static channels")
+	fs.BoolVar(&o.addMissing, "add-missing", false, "with -names on RUCKUS One, add serial numbers the tenant does not have to the -venue (this creates APs in your tenant)")
 	fs.StringVar(&o.overridesPath, "remove-overrides", "", "remove per-AP overrides from the APs listed in this CSV")
 	fs.StringVar(&o.overrides, "overrides", "default", `which overrides to remove: "default", "all", "none", or a comma-separated list`)
 	fs.StringVar(&o.radio24, "radio24", "skip", "with -remove-overrides, switch the 2.4 GHz radio: on, off or skip")
@@ -237,8 +239,11 @@ func runCLI(opt options) error {
 	}()
 	logLine("Connected: " + b.Describe())
 
+	if opt.addMissing && (b.Kind() != "r1" || opt.namesPath == "") {
+		return errors.New("-add-missing applies to -names on RUCKUS One (-r1) only")
+	}
 	var zone Zone
-	if opt.exportPath != "" || opt.channels {
+	if opt.exportPath != "" || opt.channels || opt.addMissing {
 		zones, err := b.Zones(ctx)
 		if err != nil {
 			return err
@@ -284,7 +289,18 @@ func runCLI(opt options) error {
 		for _, r := range rows {
 			ids = append(ids, r.ID)
 		}
-		if err := runNaming(ctx, b, rows, opt.concurrency, emit); err != nil {
+		addTo := ""
+		if opt.addMissing {
+			missing, err := b.(*r1Backend).Missing(ctx, ids)
+			if err != nil {
+				return err
+			}
+			if len(missing) > 0 {
+				addTo = zone.ID
+				logLine(fmt.Sprintf("WARNING: %d serial numbers are not in the tenant and will be ADDED to %s as new APs", len(missing), zone.Name))
+			}
+		}
+		if err := runNaming(ctx, b, rows, addTo, opt.concurrency, emit); err != nil {
 			return err
 		}
 		if err := writeOut(); err != nil {

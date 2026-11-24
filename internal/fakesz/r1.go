@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -156,11 +157,49 @@ func (s *R1) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 		s.page(w, body, list)
+	case len(seg) == 3 && seg[0] == "venues" && seg[2] == "aps" && r.Method == http.MethodPost:
+		s.add(w, seg[1], body)
 	case len(seg) >= 4 && seg[0] == "venues" && seg[2] == "aps":
 		s.ap(w, r, seg, body)
 	default:
 		r1Fail(w, 404, "no such resource: "+path)
 	}
+}
+
+var r1Serial = regexp.MustCompile(`^[1-9][0-9]{11}$`)
+
+// add creates an AP in a venue, as adding one by serial number does.
+func (s *R1) add(w http.ResponseWriter, venue string, body map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	known := false
+	for _, v := range s.venues {
+		known = known || v.ID == venue
+	}
+	serial, _ := body["serialNumber"].(string)
+	name, _ := body["name"].(string)
+	switch {
+	case !known:
+		r1Fail(w, 404, "Venue not found")
+		return
+	case !r1Serial.MatchString(serial):
+		r1Fail(w, 400, "serialNumber is not a valid serial number")
+		return
+	case len(name) < 2 || len(name) > 32:
+		r1Fail(w, 400, "name must be 2 to 32 characters")
+		return
+	}
+	for _, a := range s.aps {
+		if a.Serial == serial {
+			r1Fail(w, 422, "AP with this serial number already exists")
+			return
+		}
+	}
+	ap := &r1AP{Serial: serial, Name: name, Venue: venue, Status: "1_01_NeverContactedCloud"}
+	ap.Description, _ = body["description"].(string)
+	s.aps = append(s.aps, ap)
+	s.calls = append(s.calls, Call{Method: "POST", Path: "/venues/" + venue + "/aps", Body: body})
+	reply(w, 202, map[string]any{"requestId": "req-1"})
 }
 
 func (s *R1) ap(w http.ResponseWriter, r *http.Request, seg []string, body map[string]any) {

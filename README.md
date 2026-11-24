@@ -114,8 +114,16 @@ Everything works the same way from the same files, with these differences:
   added to a venue but not yet onboarded has no MAC address in R1, and can be
   named, described and configured by serial all the same. A MAC address in the
   first column still works for APs that have one, and a file can mix the two.
-  An AP has to be in the tenant already; a serial R1 does not know is reported
-  and skipped, not added.
+- **Serial numbers R1 does not have can be added.** Before a naming run the
+  console checks the file against the tenant. If some serials are not there it
+  stops and lists them, with a warning, and asks whether to **add them** to a
+  venue you pick, **skip them**, or cancel. Nothing is added unless you agree.
+  A row needs a name to be added (R1 requires one). Adding creates the AP with
+  its name, description and GPS position; R1 finishes creating it a moment
+  later, so static channels on a newly added row are not sent, and the result
+  says to run the file again. From the command line it is
+  `-names aps.csv -add-missing -venue "HQ Campus"`, which prints the warning
+  and carries on without asking.
 - Spreadsheets like to turn a 12-digit serial into `4.32E+11`. Format the
   column as text before saving, or those rows will be skipped.
 - Zones are **venues**.
@@ -191,6 +199,13 @@ not to your controller.
 
 One line per change, newest first. `!)` marks something that changes behaviour
 you may be relying on; `*)` is everything else.
+
+What's new in 6.1.0 (2026-11-24):
+
+```
+*) r1 - offer to add serial numbers the tenant does not have to a venue, after a warning that lists them;
+*) cli - -add-missing does the same for -names, into the -venue given;
+```
 
 What's new in 6.0.1 (2026-11-24):
 

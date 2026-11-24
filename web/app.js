@@ -514,6 +514,34 @@ function confirmRun(count, items) {
   });
 }
 
+// Before a naming run on RUCKUS One, serial numbers the tenant does not have
+// are put to the operator: adding them creates APs, which is not something to
+// do on the strength of a typo in a spreadsheet. Resolves to the venue to add
+// them to, '' to skip them, or null to call the run off.
+async function askAboutMissing() {
+  if (conn.kind !== 'r1') return '';
+  const { missing } = await post('/api/missing', { ids: naming.rows.map((r) => r.id) });
+  if (!missing || !missing.length) return '';
+  const gone = new Set(missing);
+  const rows = naming.rows.filter((r) => gone.has(r.id));
+  const unnamed = rows.filter((r) => !r.name).length;
+  $('aN').textContent = missing.length;
+  $('aList').innerHTML = rows.map((r) => `<div>${esc(r.id)}  ${esc(r.name || '(no name)')}</div>`).join('');
+  $('aNoName').hidden = !unnamed;
+  $('aNoName').textContent = unnamed ? `${plural(unnamed, 'row')} ${unnamed === 1 ? 'has' : 'have'} no name. RUCKUS One will not add an AP without one, so ${unnamed === 1 ? 'that row' : 'those rows'} will fail.` : '';
+  $('aVenue').innerHTML = $('zone').innerHTML;
+  $('aVenue').value = $('zone').value;
+  const addable = rows.length - unnamed;
+  $('aAdd').disabled = !$('aVenue').value || !addable;
+  $('addAsk').hidden = false;
+  return new Promise((resolve) => {
+    const close = (v) => { $('addAsk').hidden = true; resolve(v); };
+    $('aCancel').onclick = () => close(null);
+    $('aSkip').onclick = () => close('');
+    $('aAdd').onclick = () => close({ id: $('aVenue').value, name: $('aVenue').selectedOptions[0].textContent, count: addable });
+  });
+}
+
 async function start(body) {
   try {
     const t = tables[body.job];
@@ -539,8 +567,12 @@ $('run').onclick = async () => {
   if (view === 'naming') {
     const items = namingSummary();
     if (!items.length) return toast('Nothing to change: every column after the first is empty.');
+    let add;
+    try { add = await askAboutMissing(); } catch (e) { return toast(e.message); }
+    if (add === null) return;
+    if (add) items.unshift(`ADD ${plural(add.count, 'new AP')} to venue ${add.name}`);
     if (!await confirmRun(naming.rows.length, items)) return;
-    return start({ job: 'naming', rows: naming.rows.map(({ res, ...r }) => r) });
+    return start({ job: 'naming', rows: naming.rows.map(({ res, ...r }) => r), addToVenue: add ? add.id : '' });
   }
   if (view === 'overrides') {
     const items = overridesSummary();

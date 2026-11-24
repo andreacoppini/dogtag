@@ -67,6 +67,7 @@ func serveUI(opt options) error {
 	mux.HandleFunc("/api/connect", u.handleConnect)
 	mux.HandleFunc("/api/disconnect", u.handleDisconnect)
 	mux.HandleFunc("/api/parse", u.handleParse)
+	mux.HandleFunc("/api/missing", u.handleMissing)
 	mux.HandleFunc("/api/run", u.handleRun)
 	mux.HandleFunc("/api/stop", u.handleStop)
 	mux.HandleFunc("/api/events", u.handleEvents)
@@ -368,6 +369,38 @@ func (u *uiServer) handleParse(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"rows": rows, "skipped": skipped})
 }
 
+// handleMissing answers, before a naming run, which of its serial numbers
+// the controller does not have, so the console can ask about adding them
+// instead of finding out row by row. Only RUCKUS One can add an AP; for
+// anything else the answer is none.
+func (u *uiServer) handleMissing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if !readJSON(w, r, &req) {
+		return
+	}
+	u.mu.Lock()
+	b := u.backend
+	u.mu.Unlock()
+	rb, ok := b.(*r1Backend)
+	if !ok {
+		writeJSON(w, map[string]any{"missing": []string{}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*u.opt.timeout)
+	defer cancel()
+	missing, err := rb.Missing(ctx, req.IDs)
+	if err != nil {
+		httpErr(w, err)
+		return
+	}
+	if missing == nil {
+		missing = []string{}
+	}
+	writeJSON(w, map[string]any{"missing": missing})
+}
+
 // ---- run control ----
 
 type runRequest struct {
@@ -376,6 +409,10 @@ type runRequest struct {
 	ZoneName string `json:"zoneName"`
 
 	Rows []NameRow `json:"rows"`
+	// AddToVenue is the venue that serial numbers RUCKUS One does not have
+	// are added to. The console sets it only after the operator has been
+	// shown which ones and has agreed.
+	AddToVenue string `json:"addToVenue"`
 	OverrideJob
 
 	Concurrency int `json:"concurrency"`
@@ -432,13 +469,16 @@ func (u *uiServer) handleRun(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		start := time.Now()
 		var err error
-		if rb, ok := b.(*r1Backend); ok {
+		if rb, ok := b.(*r1Backend); ok && req.Job != "naming" {
 			rb.forget() // each run looks the tenant's APs up afresh
 		}
 		switch req.Job {
 		case "naming":
 			u.logf("Updating %d APs, %d at a time", len(req.Rows), conc)
-			err = runNaming(ctx, b, req.Rows, conc, u.publish)
+			if req.AddToVenue != "" {
+				u.logf("Serial numbers the tenant does not have will be added to the chosen venue as new APs")
+			}
+			err = runNaming(ctx, b, req.Rows, req.AddToVenue, conc, u.publish)
 		case "overrides":
 			u.logf("Removing overrides on %d APs, %d at a time", len(req.IDs), conc)
 			err = runOverrides(ctx, b, req.OverrideJob, conc, u.publish)

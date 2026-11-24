@@ -76,6 +76,7 @@ Against `https://api.ruckus.cloud`, `api.eu.ruckus.cloud` or
 | `POST /oauth2/token/{tenantId}` | client credentials for a bearer token |
 | `POST /venues/query` | venues |
 | `POST /venues/aps/query` | APs with status, IP and per-radio channel; filtered by `venueId` |
+| `POST /venues/{venueId}/aps` | add an AP by serial number, with its name, description and GPS |
 | `GET /venues/{venueId}/aps/{serial}` | name, description, GPS |
 | `PUT /venues/{venueId}/aps/{serial}` | the same, written back |
 | `GET`, `PUT /venues/{venueId}/aps/{serial}/radioSettings` | static channel and width, radio on/off, `useVenueSettings` per band |
@@ -94,6 +95,11 @@ Every write is read-modify-write. `PUT` replaces the resource, and the AP
 record requires a name, so a row that sets only a description has to carry the
 existing name with it; likewise pinning the 2.4 GHz channel must not disturb
 5 GHz.
+
+Adding is opt-in per run. The console asks `/api/missing` which serials the
+tenant lacks, shows them, and only sets `addToVenue` on the run if the
+operator agrees; the command line needs `-add-missing`. R1 creates an AP
+asynchronously, so its radio settings are not written in the same run.
 
 A 401 triggers one fresh sign-in (tokens expire). A 429 is retried with
 back-off, honouring `Retry-After`.
