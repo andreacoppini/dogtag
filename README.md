@@ -45,7 +45,8 @@ and press **Connect**. The tools are the tabs across the top.
 
 ### AP Naming and Static Channels
 
-Load a CSV with one AP per row, MAC address first:
+Load a CSV with one AP per row, the AP's ID first. That is the **MAC address**
+on SmartZone and the **serial number** on RUCKUS One (see below):
 
 ```
 MAC,Name,Description,Location,GPSLatitude,GPSLongitude,24Width,24Channel,50Width,50Channel
@@ -57,13 +58,14 @@ Check the table, press **Run**, confirm. Each row gets `OK` or the
 controller's own error.
 
 - Blank cells are left alone, so a file carrying only names changes only names.
-- Rows whose first column is not a MAC address (a header, a note) are skipped.
+- Rows whose first column is neither a MAC address nor a serial number (a
+  header, a note) are skipped.
 - A channel given without a width means 20 MHz.
 - Select rows and press **Delete** (or **Remove**) to drop them before a run.
 
 ### Remove Overrides
 
-Load a CSV of MAC addresses (only the first column is read), tick which
+Load a CSV of MAC addresses or serial numbers (only the first column is read), tick which
 per-AP settings to hand back to the zone or venue, and optionally switch the
 2.4 or 5 GHz radio on or off or force the AP's address back to DHCP. The table
 lists, per AP, what worked and what did not.
@@ -78,7 +80,8 @@ Pick a zone or venue and press **Refresh** to count the connected APs on each
 **Export APs to CSV** writes every AP in the selected zone or venue: MAC, name,
 description, location, GPS, current channels, serial, status, model, IP. The
 first ten columns are a naming file, so the export can be edited in a
-spreadsheet and loaded straight back in.
+spreadsheet and loaded straight back in. A RUCKUS One export puts the serial
+number first and the MAC where the serial would be.
 
 Loading an export back **pins each AP to the channel it was on** when
 exported, because the channel columns are filled in. Clear those columns first
@@ -99,6 +102,22 @@ administrator rights.
 
 Everything works the same way from the same files, with these differences:
 
+- **The serial number is the AP's ID.** Put it in the first column:
+
+  ```
+  Serial,Name,Description
+  432100002000,Lobby-AP,Front desk
+  432100002001,Cafe-AP,
+  ```
+
+  It is the only ID an AP has until it has come online: an AP that has been
+  added to a venue but not yet onboarded has no MAC address in R1, and can be
+  named, described and configured by serial all the same. A MAC address in the
+  first column still works for APs that have one, and a file can mix the two.
+  An AP has to be in the tenant already; a serial R1 does not know is reported
+  and skipped, not added.
+- Spreadsheets like to turn a 12-digit serial into `4.32E+11`. Format the
+  column as text before saving, or those rows will be skipped.
 - Zones are **venues**.
 - R1 has **no Location field**; that column is ignored.
 - A name must be 2 to 32 characters; R1 refuses anything else.
@@ -172,6 +191,14 @@ not to your controller.
 
 One line per change, newest first. `!)` marks something that changes behaviour
 you may be relying on; `*)` is everything else.
+
+What's new in 6.0.1 (2026-11-24):
+
+```
+!) r1 - the serial number is the AP's ID: files keyed by serial work, including APs not yet onboarded;
+!) r1 - the export puts the serial number first, so it loads straight back in;
+*) smartzone - a row keyed by serial number is refused with the reason, once, and nothing is sent;
+```
 
 What's new in 6.0.0 (2026-11-23):
 

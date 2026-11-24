@@ -262,13 +262,13 @@ func runCLI(opt options) error {
 			if e.Row.Error != "" {
 				failed++
 			}
-			logLine(fmt.Sprintf("[%d/%d] %s  %s", e.Done+e.Failed, e.Total, e.Row.MAC, firstNonEmpty(prefixed("ERROR: ", e.Row.Error), e.Row.OK)))
+			logLine(fmt.Sprintf("[%d/%d] %s  %s", e.Done+e.Failed, e.Total, e.Row.ID, firstNonEmpty(prefixed("ERROR: ", e.Row.Error), e.Row.OK)))
 		}
 	}
-	var macs []string
+	var ids []string
 	writeOut := func() error {
-		defer func() { results, macs = map[int]*RowResult{}, nil }()
-		return writeResults(opt.out, macs, results)
+		defer func() { results, ids = map[int]*RowResult{}, nil }()
+		return writeResults(opt.out, ids, results)
 	}
 
 	if opt.namesPath != "" {
@@ -278,11 +278,11 @@ func runCLI(opt options) error {
 		}
 		rows, skipped := parseNaming(string(text))
 		if len(rows) == 0 {
-			return fmt.Errorf("no APs found in %s: the first column of each row must be a MAC address", opt.namesPath)
+			return fmt.Errorf("no APs found in %s: the first column of each row must be a MAC address or a serial number", opt.namesPath)
 		}
 		logLine(fmt.Sprintf("%d APs to update (%d lines skipped)", len(rows), skipped))
 		for _, r := range rows {
-			macs = append(macs, r.MAC)
+			ids = append(ids, r.ID)
 		}
 		if err := runNaming(ctx, b, rows, opt.concurrency, emit); err != nil {
 			return err
@@ -296,17 +296,17 @@ func runCLI(opt options) error {
 		if err != nil {
 			return err
 		}
-		list, skipped := parseMACs(string(text))
+		list, skipped := parseIDs(string(text))
 		if len(list) == 0 {
-			return fmt.Errorf("no APs found in %s: the first column of each row must be a MAC address", opt.overridesPath)
+			return fmt.Errorf("no APs found in %s: the first column of each row must be a MAC address or a serial number", opt.overridesPath)
 		}
 		ids, err := chooseOverrides(b.OverrideOptions(), opt.overrides)
 		if err != nil {
 			return err
 		}
 		logLine(fmt.Sprintf("%d APs, %d overrides each (%d lines skipped)", len(list), len(ids), skipped))
-		macs = list
-		job := OverrideJob{MACs: list, Overrides: ids, Radio24: opt.radio24, Radio50: opt.radio50, IPDynamic: opt.ipDynamic}
+		ids = list
+		job := OverrideJob{IDs: list, Overrides: ids, Radio24: opt.radio24, Radio50: opt.radio50, IPDynamic: opt.ipDynamic}
 		if err := runOverrides(ctx, b, job, opt.concurrency, emit); err != nil {
 			return err
 		}
@@ -433,12 +433,12 @@ func writeCSV(path string, records [][]string) error {
 }
 
 // writeResults writes one line per AP, including any the run never reached.
-func writeResults(path string, macs []string, results map[int]*RowResult) error {
+func writeResults(path string, ids []string, results map[int]*RowResult) error {
 	if path == "" {
 		return nil
 	}
-	records := [][]string{{"MAC", "OK", "Error"}}
-	for i, mac := range macs {
+	records := [][]string{{"AP", "OK", "Error"}}
+	for i, mac := range ids {
 		rec := []string{mac, "", "not attempted"}
 		if r := results[i]; r != nil {
 			rec = []string{mac, r.OK, r.Error}

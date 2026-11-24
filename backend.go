@@ -29,13 +29,17 @@ type Backend interface {
 	// ListHasChannels reports whether ListAPs already carries status and
 	// channels, which saves the channel count a request per AP.
 	ListHasChannels() bool
+	// Check says whether the controller can act on this AP at all, so a row
+	// that cannot work fails once instead of once per request. id is a MAC
+	// address or a serial number, as the file gave it.
+	Check(ctx context.Context, id string) error
 	ApplyName(ctx context.Context, row NameRow) error
 	OverrideOptions() []OverrideOption
 	// RemoveOverrides hands the named settings back to the zone or venue,
 	// reporting each one through note.
-	RemoveOverrides(ctx context.Context, mac string, ids []string, note func(label string, err error))
-	SetRadio(ctx context.Context, mac, band string, on bool) error
-	SetDynamicIP(ctx context.Context, mac string) error
+	RemoveOverrides(ctx context.Context, id string, ids []string, note func(label string, err error))
+	SetRadio(ctx context.Context, id, band string, on bool) error
+	SetDynamicIP(ctx context.Context, id string) error
 	KeepAlive(ctx context.Context) error
 	Close(ctx context.Context) error
 }
@@ -110,12 +114,24 @@ func (b *szBackend) Detail(ctx context.Context, ap *APInfo) error {
 	return nil
 }
 
+// Check refuses a serial number: SmartZone's API addresses an AP by its MAC
+// address and nothing else.
+func (b *szBackend) Check(_ context.Context, id string) error {
+	if isSerial(id) {
+		return errors.New("SmartZone identifies APs by MAC address; this row gives a serial number")
+	}
+	return nil
+}
+
 func (b *szBackend) ApplyName(ctx context.Context, row NameRow) error {
+	if err := b.Check(ctx, row.ID); err != nil {
+		return err
+	}
 	p, err := row.patch()
 	if err != nil {
 		return err
 	}
-	return b.c.PatchAP(ctx, row.MAC, p)
+	return b.c.PatchAP(ctx, row.ID, p)
 }
 
 // szOverrides are the per-AP overrides SmartZone can clear. The names are the
@@ -162,15 +178,17 @@ func (b *szBackend) Close(ctx context.Context) error     { return b.c.Logout(ctx
 
 // --------------------------------------------------------------- RUCKUS One
 
-// r1Backend addresses APs the way the files do, by MAC. R1 itself wants the
-// venue and serial number, so the tenant's AP list is read once and kept as
-// an index.
+// r1Backend finds APs by whichever ID a file gives. R1's own key is the
+// serial number, and it is the only one an AP has until it has come online:
+// an AP added to a venue but not yet onboarded reports no MAC address. So the
+// tenant's AP list is read once and indexed by serial and, where there is
+// one, by MAC as well.
 type r1Backend struct {
 	c      *r1.Client
 	tenant string
 
 	mu    sync.Mutex
-	index map[string]r1.AP // by MAC
+	index map[string]r1.AP // by serial number and by MAC
 }
 
 func (b *r1Backend) Kind() string { return "r1" }
@@ -206,7 +224,7 @@ func (b *r1Backend) ListAPs(ctx context.Context, zoneID string) ([]APInfo, error
 		b.index = map[string]r1.AP{}
 	}
 	for _, a := range aps {
-		b.index[a.MAC] = a
+		b.remember(a)
 		info := APInfo{MAC: a.MAC, Name: a.Name, Serial: a.Serial, Status: a.Status, Model: a.Model,
 			IP: a.IP, IPType: a.IPType, Connected: r1Connected(a.Status), venue: a.VenueID}
 		for _, r := range a.Radios {
@@ -241,9 +259,9 @@ func (b *r1Backend) Detail(ctx context.Context, ap *APInfo) error {
 	return nil
 }
 
-// find resolves a MAC to the AP R1 knows it as, reading the tenant's AP list
-// the first time one is asked for.
-func (b *r1Backend) find(ctx context.Context, mac string) (r1.AP, error) {
+// find resolves a serial number or a MAC to the AP R1 knows it as, reading
+// the tenant's AP list the first time one is asked for.
+func (b *r1Backend) find(ctx context.Context, id string) (r1.AP, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.index == nil {
@@ -251,16 +269,34 @@ func (b *r1Backend) find(ctx context.Context, mac string) (r1.AP, error) {
 		if err != nil {
 			return r1.AP{}, err
 		}
-		b.index = make(map[string]r1.AP, len(aps))
+		b.index = make(map[string]r1.AP, 2*len(aps))
 		for _, a := range aps {
-			b.index[a.MAC] = a
+			b.remember(a)
 		}
 	}
-	ap, ok := b.index[mac]
-	if !ok {
-		return r1.AP{}, errors.New("no AP with this MAC address in the tenant")
+	ap, ok := b.index[id]
+	switch {
+	case ok:
+		return ap, nil
+	case isSerial(id):
+		return r1.AP{}, errors.New("no AP with this serial number in the tenant: add it to a venue in RUCKUS One first")
 	}
-	return ap, nil
+	return r1.AP{}, errors.New("no AP with this MAC address in the tenant; an AP that has not come online yet can only be found by serial number")
+}
+
+// remember indexes one AP. The caller holds the lock.
+func (b *r1Backend) remember(a r1.AP) {
+	if a.Serial != "" {
+		b.index[a.Serial] = a
+	}
+	if a.MAC != "" {
+		b.index[a.MAC] = a
+	}
+}
+
+func (b *r1Backend) Check(ctx context.Context, id string) error {
+	_, err := b.find(ctx, id)
+	return err
 }
 
 // forget drops the index, so the next run sees APs added since the last.
@@ -305,9 +341,9 @@ func (b *r1Backend) ApplyName(ctx context.Context, row NameRow) error {
 		if row.Location != "" {
 			return errors.New("nothing to change: RUCKUS One has no location field, and the row sets nothing else")
 		}
-		return errors.New("nothing to change: every column after the MAC is empty")
+		return errors.New("nothing to change: every column after the first is empty")
 	}
-	ap, err := b.find(ctx, row.MAC)
+	ap, err := b.find(ctx, row.ID)
 	if err != nil {
 		return err
 	}

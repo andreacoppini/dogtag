@@ -48,12 +48,12 @@ func TestQueriesArePagedAndFilteredByVenue(t *testing.T) {
 	c := dial(t, f)
 	ctx := context.Background()
 	all, err := c.APs(ctx, "")
-	if err != nil || len(all) != 28 {
-		t.Fatalf("tenant APs = %d, %v; want 28 across pages of 6", len(all), err)
+	if err != nil || len(all) != 30 {
+		t.Fatalf("tenant APs = %d, %v; want 30 across pages of 6", len(all), err)
 	}
 	hq, err := c.APs(ctx, "v-hq")
-	if err != nil || len(hq) != 20 {
-		t.Fatalf("venue APs = %d, %v; want 20", len(hq), err)
+	if err != nil || len(hq) != 22 {
+		t.Fatalf("venue APs = %d, %v; want 22", len(hq), err)
 	}
 	ap := hq[0]
 	if ap.MAC != "C8:03:F5:30:40:B0" || ap.Serial == "" || len(ap.Radios) != 2 || ap.IP == "" {

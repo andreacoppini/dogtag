@@ -9,10 +9,13 @@ import (
 	"strings"
 )
 
-// NameRow is one line of an AP naming file: the MAC address that identifies
+// NameRow is one line of an AP naming file: the ID that identifies
 // the AP, and what to set on it. Blank fields are left alone.
 type NameRow struct {
-	MAC         string `json:"mac"`
+	// ID is the AP's MAC address or its serial number. SmartZone knows APs by
+	// MAC; RUCKUS One knows them by serial, and an AP that has been added
+	// there but has never come online has no MAC to go by at all.
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Location    string `json:"location"`
@@ -32,15 +35,33 @@ var exportHeader = []string{"MAC", "Name", "Description", "Location", "GPSLatitu
 
 var macRe = regexp.MustCompile(`^([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})[:-]([0-9A-Fa-f]{2})$`)
 
-// normalMAC returns the MAC in the form the controller uses, or "" if the
-// text is not one. Anything else in the first column — a header, a note — is
-// how a line gets skipped.
+// serialRe is a RUCKUS serial number: twelve digits.
+var serialRe = regexp.MustCompile(`^[0-9]{12}$`)
+
+// normalMAC returns the MAC in the form the controllers use, or "" if the
+// text is not one.
 func normalMAC(s string) string {
 	m := macRe.FindStringSubmatch(strings.TrimSpace(s))
 	if m == nil {
 		return ""
 	}
 	return strings.ToUpper(strings.Join(m[1:], ":"))
+}
+
+// isSerial reports whether an ID is a serial number rather than a MAC.
+func isSerial(id string) bool { return serialRe.MatchString(id) }
+
+// normalID returns the AP's ID — a MAC address or a serial number — in its
+// standard form, or "" if the text is neither. Anything else in the first
+// column — a header, a note — is how a line gets skipped.
+func normalID(s string) string {
+	if mac := normalMAC(s); mac != "" {
+		return mac
+	}
+	if s = strings.TrimSpace(s); isSerial(s) {
+		return s
+	}
+	return ""
 }
 
 // readRecords parses CSV text leniently: files that have been through a
@@ -65,15 +86,15 @@ func readRecords(text string) [][]string {
 	}
 }
 
-// parseNaming reads a naming file. Lines whose first column is not a MAC
-// address are skipped and counted.
+// parseNaming reads a naming file. Lines whose first column is neither a MAC
+// address nor a serial number are skipped and counted.
 func parseNaming(text string) (rows []NameRow, skipped int) {
 	for _, rec := range readRecords(text) {
 		if len(rec) == 0 || (len(rec) == 1 && strings.TrimSpace(rec[0]) == "") {
 			continue
 		}
-		mac := normalMAC(rec[0])
-		if mac == "" {
+		id := normalID(rec[0])
+		if id == "" {
 			skipped++
 			continue
 		}
@@ -83,7 +104,7 @@ func parseNaming(text string) (rows []NameRow, skipped int) {
 			}
 			return ""
 		}
-		row := NameRow{MAC: mac, Name: col(1), Description: col(2), Location: col(3),
+		row := NameRow{ID: id, Name: col(1), Description: col(2), Location: col(3),
 			Latitude: col(4), Longitude: col(5),
 			Width24: col(6), Channel24: col(7), Width50: col(8), Channel50: col(9)}
 		// A channel given without a width means 20 MHz, as it always has here.
@@ -102,24 +123,25 @@ func parseNaming(text string) (rows []NameRow, skipped int) {
 	return rows, skipped
 }
 
-// parseMACs reads the first column of a file as a list of APs.
-func parseMACs(text string) (macs []string, skipped int) {
+// parseIDs reads the first column of a file as a list of APs, by MAC address
+// or serial number.
+func parseIDs(text string) (ids []string, skipped int) {
 	seen := map[string]bool{}
 	for _, rec := range readRecords(text) {
 		if len(rec) == 0 || strings.TrimSpace(rec[0]) == "" {
 			continue
 		}
-		mac := normalMAC(rec[0])
-		if mac == "" {
+		id := normalID(rec[0])
+		if id == "" {
 			skipped++
 			continue
 		}
-		if !seen[mac] {
-			seen[mac] = true
-			macs = append(macs, mac)
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
-	return macs, skipped
+	return ids, skipped
 }
 
 // patch builds the change to send for one row. Only what the row actually
@@ -168,7 +190,7 @@ func (r NameRow) patch() (map[string]any, error) {
 		}
 	}
 	if len(p) == 0 {
-		return nil, fmt.Errorf("nothing to change: every column after the MAC is empty")
+		return nil, fmt.Errorf("nothing to change: every column after the first is empty")
 	}
 	return p, nil
 }

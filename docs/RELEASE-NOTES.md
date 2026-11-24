@@ -35,7 +35,10 @@ localhost. Everything it can do is also available as flags: run it with `-h`.
 
 ## What changed from DogTag 5
 
-- **RUCKUS One** is supported alongside SmartZone, through the R1 API.
+- **RUCKUS One** is supported alongside SmartZone, through the R1 API. There
+  the AP's ID is its **serial number**: key the file by serial and it covers
+  APs that have been added to a venue but are not onboarded yet, which have no
+  MAC address to go by.
 - APs are worked **in parallel**, eight at a time by default.
 - The SmartZone API version is **negotiated** with the controller instead of
   being fixed at the one SmartZone 5.0 shipped with.

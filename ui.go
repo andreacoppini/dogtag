@@ -353,15 +353,15 @@ func (u *uiServer) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 // file means the same thing on both surfaces.
 func (u *uiServer) handleParse(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Kind string `json:"kind"` // "naming" or "macs"
+		Kind string `json:"kind"` // "naming" or "ids"
 		Text string `json:"text"`
 	}
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if req.Kind == "macs" {
-		macs, skipped := parseMACs(req.Text)
-		writeJSON(w, map[string]any{"macs": macs, "skipped": skipped})
+	if req.Kind == "ids" {
+		ids, skipped := parseIDs(req.Text)
+		writeJSON(w, map[string]any{"ids": ids, "skipped": skipped})
 		return
 	}
 	rows, skipped := parseNaming(req.Text)
@@ -391,7 +391,7 @@ func (u *uiServer) handleRun(w http.ResponseWriter, r *http.Request) {
 	case req.Job == "naming" && len(req.Rows) == 0:
 		httpErr(w, errors.New("no APs to update: load a CSV file first"))
 		return
-	case req.Job == "overrides" && len(req.MACs) == 0:
+	case req.Job == "overrides" && len(req.IDs) == 0:
 		httpErr(w, errors.New("no APs to work on: load a CSV file first"))
 		return
 	case needZone && req.ZoneID == "":
@@ -402,8 +402,8 @@ func (u *uiServer) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i := range req.Rows {
-		if mac := normalMAC(req.Rows[i].MAC); mac != "" {
-			req.Rows[i].MAC = mac
+		if id := normalID(req.Rows[i].ID); id != "" {
+			req.Rows[i].ID = id
 		}
 	}
 	conc := req.Concurrency
@@ -440,7 +440,7 @@ func (u *uiServer) handleRun(w http.ResponseWriter, r *http.Request) {
 			u.logf("Updating %d APs, %d at a time", len(req.Rows), conc)
 			err = runNaming(ctx, b, req.Rows, conc, u.publish)
 		case "overrides":
-			u.logf("Removing overrides on %d APs, %d at a time", len(req.MACs), conc)
+			u.logf("Removing overrides on %d APs, %d at a time", len(req.IDs), conc)
 			err = runOverrides(ctx, b, req.OverrideJob, conc, u.publish)
 		case "channels":
 			u.logf("Counting channels in %s", req.ZoneName)

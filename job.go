@@ -49,7 +49,7 @@ type Emitter func(Event)
 // AP and some can succeed while others fail.
 type RowResult struct {
 	Index int    `json:"index"`
-	MAC   string `json:"mac"`
+	ID    string `json:"id"` // MAC address or serial number, as the file gave it
 	OK    string `json:"ok"`
 	Error string `json:"error"`
 }
@@ -74,7 +74,7 @@ type ChanRow struct {
 
 // OverrideJob says what to clear or force on each AP.
 type OverrideJob struct {
-	MACs      []string `json:"macs"`
+	IDs       []string `json:"ids"`
 	Overrides []string `json:"overrides"`
 	Radio24   string   `json:"radio24"` // "on", "off" or "skip"
 	Radio50   string   `json:"radio50"`
@@ -136,7 +136,7 @@ func runNaming(ctx context.Context, b Backend, rows []NameRow, conc int, emit Em
 
 	forEach(ctx, len(rows), conc, func(i int) {
 		row := rows[i]
-		res := &RowResult{Index: i, MAC: row.MAC}
+		res := &RowResult{Index: i, ID: row.ID}
 		err := b.ApplyName(ctx, row)
 		switch {
 		case err == nil:
@@ -165,14 +165,14 @@ func runNaming(ctx context.Context, b Backend, rows []NameRow, conc int, emit Em
 // parallel.
 func runOverrides(ctx context.Context, b Backend, j OverrideJob, conc int, emit Emitter) error {
 	const job = "overrides"
-	t := &tally{total: len(j.MACs)}
+	t := &tally{total: len(j.IDs)}
 	emit(Event{Kind: EvPhase, Job: job, Phase: "removing", Total: t.total})
 	var lost atomic.Bool
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	forEach(ctx, len(j.MACs), conc, func(i int) {
-		mac := j.MACs[i]
+	forEach(ctx, len(j.IDs), conc, func(i int) {
+		id := j.IDs[i]
 		var ok, bad []string
 		note := func(label string, err error) {
 			if err == nil {
@@ -188,15 +188,27 @@ func runOverrides(ctx context.Context, b Backend, j OverrideJob, conc int, emit 
 			}
 			bad = append(bad, fmt.Sprintf("%s (%s)", label, err))
 		}
-		b.RemoveOverrides(ctx, mac, j.Overrides, note)
-		if on, set := radioChoice(j.Radio24); set && ctx.Err() == nil {
-			note("2G", b.SetRadio(ctx, mac, "24", on))
-		}
-		if on, set := radioChoice(j.Radio50); set && ctx.Err() == nil {
-			note("5G", b.SetRadio(ctx, mac, "50", on))
-		}
-		if j.IPDynamic && ctx.Err() == nil {
-			note("IP", b.SetDynamicIP(ctx, mac))
+		if err := b.Check(ctx, id); err != nil {
+			// An AP the controller cannot act on fails once, with the reason,
+			// rather than once for every setting.
+			if sessionLost(err) {
+				lost.Store(true)
+				cancel()
+			} else if ctx.Err() != nil {
+				return
+			}
+			bad = []string{err.Error()}
+		} else {
+			b.RemoveOverrides(ctx, id, j.Overrides, note)
+			if on, set := radioChoice(j.Radio24); set && ctx.Err() == nil {
+				note("2G", b.SetRadio(ctx, id, "24", on))
+			}
+			if on, set := radioChoice(j.Radio50); set && ctx.Err() == nil {
+				note("5G", b.SetRadio(ctx, id, "50", on))
+			}
+			if j.IPDynamic && ctx.Err() == nil {
+				note("IP", b.SetDynamicIP(ctx, id))
+			}
 		}
 		if ctx.Err() != nil && !lost.Load() {
 			return
@@ -206,7 +218,7 @@ func runOverrides(ctx context.Context, b Backend, j OverrideJob, conc int, emit 
 		} else {
 			t.done.Add(1)
 		}
-		emit(t.event(job, &RowResult{Index: i, MAC: mac, OK: strings.Join(ok, ", "), Error: strings.Join(bad, ", ")}))
+		emit(t.event(job, &RowResult{Index: i, ID: id, OK: strings.Join(ok, ", "), Error: strings.Join(bad, ", ")}))
 	})
 	if lost.Load() {
 		return sz.ErrSessionEnded
@@ -257,7 +269,7 @@ func inventory(ctx context.Context, b Backend, job, zoneID string, detail bool, 
 				cancel()
 			}
 			t.failed.Add(1)
-			emit(Event{Kind: EvLog, Message: fmt.Sprintf("%s: %s", aps[i].MAC, err)})
+			emit(Event{Kind: EvLog, Message: fmt.Sprintf("%s: %s", firstNonEmpty(aps[i].MAC, aps[i].Serial), err)})
 		} else {
 			t.done.Add(1)
 		}
@@ -281,13 +293,25 @@ func runExport(ctx context.Context, b Backend, zoneID string, conc int, emit Emi
 	if err != nil {
 		return nil, err
 	}
-	records := [][]string{exportHeader}
+	// The first column is whatever the controller knows the AP by, so that
+	// the file loads straight back in: the MAC on SmartZone, the serial number
+	// on RUCKUS One, where an AP that has not come online has no MAC yet.
+	bySerial := b.Kind() == "r1"
+	header := append([]string(nil), exportHeader...)
+	if bySerial {
+		header[0], header[10] = "Serial", "MAC"
+	}
+	records := [][]string{header}
 	for _, ap := range aps {
+		id, other := ap.MAC, ap.Serial
+		if bySerial {
+			id, other = ap.Serial, ap.MAC
+		}
 		records = append(records, []string{
-			ap.MAC, ap.Name, ap.Description, ap.Location, ap.Latitude, ap.Longitude,
+			id, ap.Name, ap.Description, ap.Location, ap.Latitude, ap.Longitude,
 			"", ap.Ch24, // channel width is not reported, so it is left for the operator
 			"", ap.Ch50,
-			ap.Serial, ap.Status, ap.Model, ap.IPType, ap.IP,
+			other, ap.Status, ap.Model, ap.IPType, ap.IP,
 		})
 	}
 	return records, nil

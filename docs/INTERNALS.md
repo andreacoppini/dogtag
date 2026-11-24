@@ -82,9 +82,13 @@ Against `https://api.ruckus.cloud`, `api.eu.ruckus.cloud` or
 | `GET`, `PUT /venues/{venueId}/aps/{serial}/{x}Settings` | `useVenueSettings: true` |
 | `PUT /venues/{venueId}/aps/{serial}/networkSettings` | `ipType: DYNAMIC` |
 
-R1 addresses an AP by venue and serial number, while the files address it by
-MAC. The backend reads the tenant's AP list once per run and keeps it as an
-index.
+R1 addresses an AP by venue and serial number. A file's first column may hold
+either a serial number or a MAC address (`normalID` in `csv.go`), so the
+backend reads the tenant's AP list once per run and indexes it by both. The
+serial is the real key: an AP that has been added to a venue but has never
+come online is listed with no MAC address, and is reachable by serial alone.
+SmartZone's API takes only a MAC, so there a row keyed by serial is refused by
+`Check` before anything is sent.
 
 Every write is read-modify-write. `PUT` replaces the resource, and the AP
 record requires a name, so a row that sets only a description has to carry the

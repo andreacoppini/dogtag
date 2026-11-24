@@ -59,6 +59,15 @@ func NewR1() *R1 {
 			Ch24: ch24[i%len(ch24)], Ch50: ch50[(i*5)%len(ch50)],
 		})
 	}
+	// Two APs that have been added to a venue but have never come online: R1
+	// knows them by serial number alone, with no MAC, address or radios yet.
+	for i := 0; i < 2; i++ {
+		s.aps = append(s.aps, &r1AP{
+			Serial: fmt.Sprintf("4321%08d", 2000+i),
+			Name:   fmt.Sprintf("Pending-%d", i+1),
+			Model:  "R650", Venue: "v-hq", Status: "1_01_NeverContactedCloud",
+		})
+	}
 	return s
 }
 
@@ -69,12 +78,12 @@ func (s *R1) Calls() []Call {
 	return append([]Call(nil), s.calls...)
 }
 
-// Name returns an AP's current name and description, by MAC.
-func (s *R1) Name(mac string) (name, description string) {
+// Name returns an AP's current name and description, by MAC or serial.
+func (s *R1) Name(id string) (name, description string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, a := range s.aps {
-		if strings.EqualFold(a.MAC, mac) {
+		if a.Serial == id || (a.MAC != "" && strings.EqualFold(a.MAC, id)) {
 			return a.Name, a.Description
 		}
 	}
@@ -131,15 +140,19 @@ func (s *R1) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if want != "" && a.Venue != want {
 				continue
 			}
-			list = append(list, map[string]any{
-				"serialNumber": a.Serial, "macAddress": a.MAC, "name": a.Name, "model": a.Model,
+			item := map[string]any{
+				"serialNumber": a.Serial, "name": a.Name, "model": a.Model,
 				"venueId": a.Venue, "status": a.Status,
-				"networkStatus": map[string]any{"ipAddress": a.IP, "ipAddressType": "dynamic"},
-				"radioStatuses": []map[string]any{
+			}
+			if a.MAC != "" {
+				item["macAddress"] = a.MAC
+				item["networkStatus"] = map[string]any{"ipAddress": a.IP, "ipAddressType": "dynamic"}
+				item["radioStatuses"] = []map[string]any{
 					{"band": "2.4G", "channel": a.Ch24, "channelBandwidth": "20"},
 					{"band": "5G", "channel": a.Ch50, "channelBandwidth": "80"},
-				},
-			})
+				}
+			}
+			list = append(list, item)
 		}
 		s.mu.Unlock()
 		s.page(w, body, list)

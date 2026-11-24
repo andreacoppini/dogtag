@@ -68,7 +68,7 @@ func TestParseNaming(t *testing.T) {
 	if len(rows) != 3 || skipped != 2 {
 		t.Fatalf("rows = %d, skipped = %d; want 3 and 2 (the header and the note)", len(rows), skipped)
 	}
-	want := NameRow{MAC: "D4:68:4D:10:20:A0", Name: "Lobby, front", Description: `says "hi"`, Location: "Reception",
+	want := NameRow{ID: "D4:68:4D:10:20:A0", Name: "Lobby, front", Description: `says "hi"`, Location: "Reception",
 		Latitude: "35.1", Longitude: "14.2", Width24: "20", Channel24: "6", Width50: "20", Channel50: "36"}
 	if rows[0] != want {
 		t.Errorf("row 0 = %+v\n     want %+v", rows[0], want)
@@ -80,14 +80,14 @@ func TestParseNaming(t *testing.T) {
 }
 
 func TestParseMACs(t *testing.T) {
-	macs, skipped := parseMACs("MAC\nd4:68:4d:10:20:a0,x\nD4:68:4D:10:20:A0\n\n\"D4:68:4D:10:21:A1\"\nfoo\n")
+	macs, skipped := parseIDs("MAC\nd4:68:4d:10:20:a0,x\nD4:68:4D:10:20:A0\n\n\"D4:68:4D:10:21:A1\"\nfoo\n")
 	if !reflect.DeepEqual(macs, []string{"D4:68:4D:10:20:A0", "D4:68:4D:10:21:A1"}) || skipped != 2 {
 		t.Errorf("macs = %v, skipped = %d", macs, skipped)
 	}
 }
 
 func TestPatchCarriesOnlyWhatTheRowSets(t *testing.T) {
-	p, err := NameRow{MAC: "x", Name: `He said "hi"`, Latitude: "35.5", Longitude: "-14", Width24: "20", Channel24: "6"}.patch()
+	p, err := NameRow{ID: "x", Name: `He said "hi"`, Latitude: "35.5", Longitude: "-14", Width24: "20", Channel24: "6"}.patch()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestPatchCarriesOnlyWhatTheRowSets(t *testing.T) {
 	if !reflect.DeepEqual(p, want) {
 		t.Errorf("patch = %v\n   want %v", p, want)
 	}
-	for _, bad := range []NameRow{{MAC: "x"}, {MAC: "x", Latitude: "35"}, {MAC: "x", Channel50: "auto"}, {MAC: "x", Latitude: "n", Longitude: "e"}} {
+	for _, bad := range []NameRow{{ID: "x"}, {ID: "x", Latitude: "35"}, {ID: "x", Channel50: "auto"}, {ID: "x", Latitude: "n", Longitude: "e"}} {
 		if _, err := bad.patch(); err == nil {
 			t.Errorf("%+v was accepted", bad)
 		}
@@ -108,10 +108,10 @@ func TestNamingOnSmartZone(t *testing.T) {
 	f.FailMAC = "D4:68:4D:10:22:A2"
 	b := szBackendFor(t, f)
 	rows := []NameRow{
-		{MAC: "D4:68:4D:10:20:A0", Name: "Lobby", Description: "Front desk", Location: "Ground", Channel24: "11", Width24: "20"},
-		{MAC: "D4:68:4D:10:21:A1", Description: "Only this"},
-		{MAC: "D4:68:4D:10:22:A2", Name: "Refused"},
-		{MAC: "D4:68:4D:10:23:A3"},
+		{ID: "D4:68:4D:10:20:A0", Name: "Lobby", Description: "Front desk", Location: "Ground", Channel24: "11", Width24: "20"},
+		{ID: "D4:68:4D:10:21:A1", Description: "Only this"},
+		{ID: "D4:68:4D:10:22:A2", Name: "Refused"},
+		{ID: "D4:68:4D:10:23:A3"},
 	}
 	emit, got := collect()
 	if err := runNaming(context.Background(), b, rows, 4, emit); err != nil {
@@ -143,7 +143,7 @@ func TestNamingOnSmartZone(t *testing.T) {
 func TestOverridesOnSmartZone(t *testing.T) {
 	f := fakesz.New()
 	b := szBackendFor(t, f)
-	job := OverrideJob{MACs: []string{"D4:68:4D:10:20:A0", "AA:BB:CC:DD:EE:FF"},
+	job := OverrideJob{IDs: []string{"D4:68:4D:10:20:A0", "AA:BB:CC:DD:EE:FF"},
 		Overrides: []string{"wifi24", "syslog"}, Radio24: "off", Radio50: "skip", IPDynamic: true}
 	emit, got := collect()
 	if err := runOverrides(context.Background(), b, job, 2, emit); err != nil {
@@ -190,7 +190,7 @@ func TestExportRoundTripsThroughNaming(t *testing.T) {
 	if len(rows) != 12 || skipped != 1 {
 		t.Fatalf("an export read back as %d rows with %d skipped; want 12 and the header", len(rows), skipped)
 	}
-	if rows[0].MAC != records[1][0] || rows[0].Name != records[1][1] || rows[0].Channel50 == "" || rows[0].Width50 != "20" {
+	if rows[0].ID != records[1][0] || rows[0].Name != records[1][1] || rows[0].Channel50 == "" || rows[0].Width50 != "20" {
 		t.Errorf("first row back = %+v", rows[0])
 	}
 }
@@ -244,7 +244,7 @@ func TestALostSessionStopsTheRun(t *testing.T) {
 	f.EndSessions()
 	rows := make([]NameRow, 20)
 	for i := range rows {
-		rows[i] = NameRow{MAC: "D4:68:4D:10:20:A0", Name: "x"}
+		rows[i] = NameRow{ID: "D4:68:4D:10:20:A0", Name: "x"}
 	}
 	emit, got := collect()
 	err := runNaming(context.Background(), b, rows, 2, emit)
@@ -261,7 +261,7 @@ func TestStopLeavesUnreachedRowsUnmarked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	emit, got := collect()
-	if err := runNaming(ctx, b, []NameRow{{MAC: "D4:68:4D:10:20:A0", Name: "x"}}, 1, emit); err != nil {
+	if err := runNaming(ctx, b, []NameRow{{ID: "D4:68:4D:10:20:A0", Name: "x"}}, 1, emit); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(got()); n != 0 {
@@ -274,12 +274,12 @@ func TestNamingOnRuckusOne(t *testing.T) {
 	f.FailSerial = "432100001003"
 	b := r1BackendFor(t, f)
 	rows := []NameRow{
-		{MAC: "C8:03:F5:30:40:B0", Name: "Lobby", Location: "ignored", Channel24: "6", Width24: "20", Channel50: "36", Width50: "80"},
-		{MAC: "C8:03:F5:30:41:B1", Description: "Only this"},
-		{MAC: "C8:03:F5:30:42:B2", Location: "Nowhere to put this"},
-		{MAC: "C8:03:F5:30:43:B3", Name: "Refused"},
-		{MAC: "AA:BB:CC:DD:EE:FF", Name: "Ghost"},
-		{MAC: "C8:03:F5:30:44:B4", Name: "Half", Latitude: "35"},
+		{ID: "C8:03:F5:30:40:B0", Name: "Lobby", Location: "ignored", Channel24: "6", Width24: "20", Channel50: "36", Width50: "80"},
+		{ID: "C8:03:F5:30:41:B1", Description: "Only this"},
+		{ID: "C8:03:F5:30:42:B2", Location: "Nowhere to put this"},
+		{ID: "C8:03:F5:30:43:B3", Name: "Refused"},
+		{ID: "AA:BB:CC:DD:EE:FF", Name: "Ghost"},
+		{ID: "C8:03:F5:30:44:B4", Name: "Half", Latitude: "35"},
 	}
 	emit, got := collect()
 	if err := runNaming(context.Background(), b, rows, 3, emit); err != nil {
@@ -314,7 +314,7 @@ func TestNamingOnRuckusOne(t *testing.T) {
 func TestOverridesOnRuckusOne(t *testing.T) {
 	f := fakesz.NewR1()
 	b := r1BackendFor(t, f)
-	job := OverrideJob{MACs: []string{"C8:03:F5:30:40:B0"}, Overrides: []string{"radio24", "radio50", "ledSettings"},
+	job := OverrideJob{IDs: []string{"C8:03:F5:30:40:B0"}, Overrides: []string{"radio24", "radio50", "ledSettings"},
 		Radio24: "skip", Radio50: "off", IPDynamic: true}
 	emit, got := collect()
 	if err := runOverrides(context.Background(), b, job, 1, emit); err != nil {
@@ -377,5 +377,110 @@ func TestOriginalCommandLineStillParses(t *testing.T) {
 		if o, _ := parseFlags([]string{alias}); o.host != "h" {
 			t.Errorf("%s was not understood", alias)
 		}
+	}
+}
+
+func TestSerialNumbersAreIDsToo(t *testing.T) {
+	rows, skipped := parseNaming("Serial,Name\n432100002000,Pending\n 432100001000 ,Online\n12345,too short\n4321000020001,too long\n")
+	if len(rows) != 2 || skipped != 3 || rows[0].ID != "432100002000" || rows[1].ID != "432100001000" {
+		t.Fatalf("rows = %+v, skipped = %d", rows, skipped)
+	}
+	ids, _ := parseIDs("432100002000\nC8:03:F5:30:40:B0\n432100002000\n")
+	if !reflect.DeepEqual(ids, []string{"432100002000", "C8:03:F5:30:40:B0"}) {
+		t.Errorf("ids = %v", ids)
+	}
+}
+
+// An AP added to a venue but not yet onboarded has no MAC address in RUCKUS
+// One; its serial number is all there is to go by.
+func TestRuckusOneWorksAPsBySerialBeforeTheyHaveAMAC(t *testing.T) {
+	f := fakesz.NewR1()
+	b := r1BackendFor(t, f)
+	rows := []NameRow{
+		{ID: "432100002000", Name: "Lobby-new", Description: "Not installed yet"},
+		{ID: "432100001000", Name: "Online-by-serial"},
+		{ID: "C8:03:F5:30:41:B1", Name: "Online-by-MAC"},
+		{ID: "432199999999", Name: "Not in the tenant"},
+	}
+	emit, got := collect()
+	if err := runNaming(context.Background(), b, rows, 2, emit); err != nil {
+		t.Fatal(err)
+	}
+	res := got()
+	for i := 0; i < 3; i++ {
+		if res[i].OK != "OK" {
+			t.Errorf("row %d = %+v", i, res[i])
+		}
+	}
+	if !strings.Contains(res[3].Error, "no AP with this serial number") {
+		t.Errorf("row 3 error = %q", res[3].Error)
+	}
+	if name, desc := f.Name("432100002000"); name != "Lobby-new" || desc != "Not installed yet" {
+		t.Errorf("pending AP = %q / %q", name, desc)
+	}
+	if name, _ := f.Name("432100001000"); name != "Online-by-serial" {
+		t.Errorf("online AP addressed by serial = %q", name)
+	}
+
+	emit, got = collect()
+	job := OverrideJob{IDs: []string{"432100002000", "432199999999"}, Overrides: []string{"ledSettings"}, Radio24: "off"}
+	if err := runOverrides(context.Background(), b, job, 1, emit); err != nil {
+		t.Fatal(err)
+	}
+	res = got()
+	if res[0].OK != "ledSettings, 2G" || res[0].Error != "" {
+		t.Errorf("overrides by serial = %+v", res[0])
+	}
+	if res[1].OK != "" || strings.Count(res[1].Error, "serial number") != 1 {
+		t.Errorf("an unknown serial should fail once: %+v", res[1])
+	}
+}
+
+func TestRuckusOneExportIsKeyedBySerial(t *testing.T) {
+	b := r1BackendFor(t, fakesz.NewR1())
+	records, err := runExport(context.Background(), b, "v-hq", 4, func(Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[0][0] != "Serial" || records[0][10] != "MAC" {
+		t.Fatalf("header = %v", records[0])
+	}
+	if len(records) != 23 {
+		t.Fatalf("%d records; want the 20 online APs and the 2 not yet onboarded", len(records)-1)
+	}
+	pending := records[len(records)-1]
+	if pending[0] != "432100002001" || pending[10] != "" || pending[1] != "Pending-2" {
+		t.Errorf("pending AP record = %v", pending)
+	}
+	var sb strings.Builder
+	for _, r := range records {
+		sb.WriteString(strings.Join(r, ",") + "\n")
+	}
+	rows, skipped := parseNaming(sb.String())
+	if len(rows) != 22 || skipped != 1 {
+		t.Errorf("the export read back as %d rows with %d skipped; every AP should survive, pending ones included", len(rows), skipped)
+	}
+}
+
+func TestSmartZoneRefusesASerialNumber(t *testing.T) {
+	f := fakesz.New()
+	b := szBackendFor(t, f)
+	emit, got := collect()
+	if err := runNaming(context.Background(), b, []NameRow{{ID: "981902000400", Name: "x"}}, 1, emit); err != nil {
+		t.Fatal(err)
+	}
+	if e := got()[0].Error; !strings.Contains(e, "identifies APs by MAC address") {
+		t.Errorf("error = %q", e)
+	}
+	emit, got = collect()
+	job := OverrideJob{IDs: []string{"981902000400"}, Overrides: []string{"wifi24", "syslog"}, IPDynamic: true}
+	if err := runOverrides(context.Background(), b, job, 1, emit); err != nil {
+		t.Fatal(err)
+	}
+	if e := got()[0].Error; strings.Count(e, "MAC address") != 1 {
+		t.Errorf("error = %q; want the reason once", e)
+	}
+	if n := len(f.Calls()); n != 0 {
+		t.Errorf("%d requests were sent for a row SmartZone cannot address", n)
 	}
 }

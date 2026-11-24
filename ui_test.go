@@ -64,7 +64,7 @@ func TestSecretsFromTheCommandLineStayOutOfThePage(t *testing.T) {
 
 func TestRunNeedsAConnection(t *testing.T) {
 	_, h := consoleFor(options{})
-	r := httptest.NewRequest("POST", "/api/run", strings.NewReader(`{"job":"naming","rows":[{"mac":"D4:68:4D:10:20:A0","name":"x"}]}`))
+	r := httptest.NewRequest("POST", "/api/run", strings.NewReader(`{"job":"naming","rows":[{"id":"D4:68:4D:10:20:A0","name":"x"}]}`))
 	r.Host = "127.0.0.1:9999"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

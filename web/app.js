@@ -141,11 +141,11 @@ function makeTable(key, cells) {
 const resultCell = (r) => (!r.res ? ['', ''] : r.res.error ? ['ERROR - ' + r.res.error, 'err'] : [r.res.ok || 'OK', 'ok']);
 
 const naming = makeTable('naming', (r) => [
-  [r.mac], [r.name], [r.description], [r.location], [r.latitude], [r.longitude],
+  [r.id], [r.name], [r.description], [r.location], [r.latitude], [r.longitude],
   [r.width24, 'num'], [r.channel24, 'num'], [r.width50, 'num'], [r.channel50, 'num'], resultCell(r),
 ]);
 const overrides = makeTable('overrides', (r) => [
-  [r.mac], [r.res ? r.res.ok : '', 'ok'], [r.res ? r.res.error : '', 'err'],
+  [r.id], [r.res ? r.res.ok : '', 'ok'], [r.res ? r.res.error : '', 'err'],
 ]);
 const tables = { naming, overrides };
 
@@ -184,7 +184,7 @@ function loadFile(input, kind, done) {
 }
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const skippedNote = (n) => (n ? `; ${plural(n, 'line')} did not start with a MAC address and ${n === 1 ? 'was' : 'were'} skipped` : '');
+const skippedNote = (n) => (n ? `; ${plural(n, 'line')} did not start with a MAC address or serial number and ${n === 1 ? 'was' : 'were'} skipped` : '');
 
 $('pickNaming').onclick = () => $('fileNaming').click();
 $('fileNaming').onchange = (e) => loadFile(e.target, 'naming', (res, name) => {
@@ -196,8 +196,8 @@ $('fileNaming').onchange = (e) => loadFile(e.target, 'naming', (res, name) => {
 $('clearNaming').onclick = () => { if (!running) { naming.set([], ''); tablesChanged(); } };
 
 $('pickMacs').onclick = () => $('fileMacs').click();
-$('fileMacs').onchange = (e) => loadFile(e.target, 'macs', (res, name) => {
-  overrides.set((res.macs || []).map((mac) => ({ mac, res: null })), name);
+$('fileMacs').onchange = (e) => loadFile(e.target, 'ids', (res, name) => {
+  overrides.set((res.ids || []).map((id) => ({ id, res: null })), name);
   tablesChanged();
   $('macsHint').textContent = `${name}: ${plural(overrides.rows.length, 'AP')}${skippedNote(res.skipped)}.`;
   log(`Loaded ${name}: ${plural(overrides.rows.length, 'AP')}${skippedNote(res.skipped)}`);
@@ -219,7 +219,7 @@ function persist() {
     s[k] = el.type === 'checkbox' ? el.checked : el.value;
   }
   s.naming = { file: naming.file, rows: naming.rows.map(({ res, ...r }) => r) };
-  s.macs = { file: overrides.file, rows: overrides.rows.map((r) => r.mac) };
+  s.ids = { file: overrides.file, rows: overrides.rows.map((r) => r.id) };
   try { localStorage.setItem('dogtag', JSON.stringify(s)); } catch (e) { /* private mode, or a file too big to keep */ }
   // The secrets must not survive on disk. They are held for this browser
   // session only, so a reload does not empty the fields unnoticed.
@@ -247,8 +247,10 @@ function restore() {
   (k === 'r1' ? $('kindR1') : $('kindSz')).checked = true;
   savedZone = s.zone || '';
   optPicks = s.optPicks || {};
-  if (s.naming && s.naming.rows) naming.set(s.naming.rows.map((r) => ({ ...r, res: null })), s.naming.file);
-  if (s.macs && s.macs.rows) overrides.set(s.macs.rows.map((mac) => ({ mac, res: null })), s.macs.file);
+  // Lists saved by 6.0.0 keyed each AP as "mac"; they are read as they were.
+  if (s.naming && s.naming.rows) naming.set(s.naming.rows.map(({ mac, ...r }) => ({ id: mac, ...r, res: null })), s.naming.file);
+  const ids = s.ids || s.macs;
+  if (ids && ids.rows) overrides.set(ids.rows.map((id) => ({ id, res: null })), ids.file);
   if (naming.rows.length) $('namingHint').textContent = `${naming.file || 'Restored'}: ${plural(naming.rows.length, 'AP')}.`;
   if (overrides.rows.length) $('macsHint').textContent = `${overrides.file || 'Restored'}: ${plural(overrides.rows.length, 'AP')}.`;
   try {
@@ -319,6 +321,14 @@ function wording(r1) {
   $('zoneTitle').textContent = r1 ? 'Venue' : 'Zone';
   document.querySelectorAll('.zoneWord').forEach((el) => { el.textContent = r1 ? 'venue' : 'zone'; });
   $('namingR1Hint').hidden = !r1;
+  document.querySelectorAll('.idHead').forEach((el) => { el.textContent = r1 ? 'Serial / MAC' : 'MAC Address'; });
+  $('idHint').textContent = r1
+    ? 'One AP per row, serial number first (a MAC address works too, once the AP has come online)'
+    : 'One AP per row, MAC address first';
+  $('filterNaming').placeholder = r1 ? 'Filter by serial, name, result…' : 'Filter by MAC, name, result…';
+  $('emptyOverrides').textContent = r1
+    ? 'Please load a CSV file — the first column of each row is the AP\'s serial number.'
+    : 'Please load a CSV file — the first column of each row is the AP\'s MAC address.';
 }
 
 function applyState(st) {
@@ -528,7 +538,7 @@ $('run').onclick = async () => {
   }
   if (view === 'naming') {
     const items = namingSummary();
-    if (!items.length) return toast('Nothing to change: every column after the MAC address is empty.');
+    if (!items.length) return toast('Nothing to change: every column after the first is empty.');
     if (!await confirmRun(naming.rows.length, items)) return;
     return start({ job: 'naming', rows: naming.rows.map(({ res, ...r }) => r) });
   }
@@ -537,7 +547,7 @@ $('run').onclick = async () => {
     if (!items.length) return toast('Nothing to do: tick at least one setting, or choose a radio or IP change.');
     if (!await confirmRun(overrides.rows.length, items)) return;
     return start({
-      job: 'overrides', macs: overrides.rows.map((r) => r.mac), overrides: pickedOptions(),
+      job: 'overrides', ids: overrides.rows.map((r) => r.id), overrides: pickedOptions(),
       radio24: $('radio24').value, radio50: $('radio50').value, ipDynamic: $('ipMode').value === 'dynamic',
     });
   }
@@ -578,13 +588,13 @@ function onEvent(e) {
     case 'row': {
       const t = tables[e.job];
       const r = t && t.rows[e.row.index];
-      // Matched on the MAC as well as the position, so results replayed after
+      // Matched on the AP's ID as well as the position, so results replayed after
       // a reload cannot land on a list that has since been edited.
-      if (r && r.mac === e.row.mac) {
+      if (r && r.id === e.row.id) {
         r.res = { ok: e.row.ok, error: e.row.error };
         t.update(e.row.index);
       }
-      if (e.row.error) log(`${e.row.mac}  ERROR - ${e.row.error}`);
+      if (e.row.error) log(`${e.row.id}  ERROR - ${e.row.error}`);
       progress(e);
       break;
     }
@@ -649,12 +659,12 @@ $('expCsv').onclick = () => {
   const res = (r) => (!r.res ? '' : r.res.error ? 'ERROR - ' + r.res.error : r.res.ok || 'OK');
   if (view === 'naming') {
     save('dogtag-naming-results.csv', [
-      ['MAC', 'Name', 'Description', 'Location', 'GPSLatitude', 'GPSLongitude', '24Width', '24Channel', '50Width', '50Channel', 'Result'],
-      ...naming.rows.map((r) => [r.mac, r.name, r.description, r.location, r.latitude, r.longitude, r.width24, r.channel24, r.width50, r.channel50, res(r)]),
+      [conn.kind === 'r1' ? 'Serial' : 'MAC', 'Name', 'Description', 'Location', 'GPSLatitude', 'GPSLongitude', '24Width', '24Channel', '50Width', '50Channel', 'Result'],
+      ...naming.rows.map((r) => [r.id, r.name, r.description, r.location, r.latitude, r.longitude, r.width24, r.channel24, r.width50, r.channel50, res(r)]),
     ]);
   } else if (view === 'overrides') {
-    save('dogtag-overrides-results.csv', [['MAC', 'OK', 'Error'],
-      ...overrides.rows.map((r) => [r.mac, r.res ? r.res.ok : '', r.res ? r.res.error : ''])]);
+    save('dogtag-overrides-results.csv', [[conn.kind === 'r1' ? 'Serial' : 'MAC', 'OK', 'Error'],
+      ...overrides.rows.map((r) => [r.id, r.res ? r.res.ok : '', r.res ? r.res.error : ''])]);
   } else if (view === 'channels' && lastChannels) {
     const c = lastChannels;
     const rows = (b, list) => (list || []).map((r) => [b, r.channel, r.aps]);

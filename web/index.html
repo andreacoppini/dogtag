@@ -90,8 +90,8 @@
       </div>
       <input type="file" id="fileNaming" accept=".csv,.txt" hidden>
       <div class="hint" id="namingHint">No file loaded.</div>
-      <div class="hint">One AP per row, MAC address first: MAC, Name, Description, Location, Latitude, Longitude, 2.4G width, 2.4G channel, 5G width, 5G channel. Blank cells are left alone; rows that do not start with a MAC are skipped. A channel with no width means 20 MHz.</div>
-      <div class="hint warn" id="namingR1Hint" hidden>RUCKUS One has no Location field, so that column is ignored there. Changes are accepted first and applied by the cloud shortly after.</div>
+      <div class="hint"><span id="idHint">One AP per row, MAC address first</span>, then: Name, Description, Location, Latitude, Longitude, 2.4G width, 2.4G channel, 5G width, 5G channel. Blank cells are left alone; rows that start with neither are skipped. A channel with no width means 20 MHz.</div>
+      <div class="hint warn" id="namingR1Hint" hidden>RUCKUS One knows an AP by its serial number, which is all an AP has until it has come online, so key the file by serial. It has no Location field, so that column is ignored. Changes are accepted first and applied by the cloud shortly after.</div>
     </div>
   </section>
 
@@ -166,7 +166,7 @@
     <div class="tablewrap">
       <table>
         <thead><tr>
-          <th>MAC Address</th><th>Name</th><th>Description</th><th>Location</th>
+          <th class="idHead">MAC Address</th><th>Name</th><th>Description</th><th>Location</th>
           <th>Latitude</th><th>Longitude</th>
           <th>Width 2.4G</th><th>Channel 2.4G</th><th>Width 5G</th><th>Channel 5G</th>
           <th>Result</th>
@@ -190,7 +190,7 @@
     </div>
     <div class="tablewrap">
       <table>
-        <thead><tr><th>MAC Address</th><th>OK</th><th>Error</th></tr></thead>
+        <thead><tr><th class="idHead">MAC Address</th><th>OK</th><th>Error</th></tr></thead>
         <tbody id="rowsOverrides"></tbody>
       </table>
       <div class="empty" id="emptyOverrides">Please load a CSV file — the first column of each row is the AP's MAC address.</div>
@@ -248,7 +248,7 @@
       </ul>
       <h4>Remove Overrides</h4>
       <ul>
-        <li>Connect, and load a CSV file of MAC addresses.</li>
+        <li>Connect, and load a CSV file of MAC addresses (SmartZone) or serial numbers (RUCKUS One).</li>
         <li>Choose which per-AP settings to hand back to the zone or venue (the default is the usual set), and whether to switch radios or force DHCP.</li>
         <li>Press <b>Run</b>.</li>
       </ul>
